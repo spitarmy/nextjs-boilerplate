@@ -1,11 +1,9 @@
-'use client';
-import React from 'react';
-import { createClient } from '@supabase/supabase-js';
+// app/page.tsx  ― サーバーコンポーネント（デフォルト）
+import ClientStatus from '../components/ClientStatus';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL as string,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY as string
-);
+export default function Page() {
+  return <ClientStatus />;
+}
 
 export default function Home() {
   const [status, setStatus] = React.useState('Checking…');
