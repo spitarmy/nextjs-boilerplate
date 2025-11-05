@@ -24,3 +24,8 @@
     "eslint-config-next": "16.0.1"
   }
 }
+{
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0"
+  }
+}
