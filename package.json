@@ -12,7 +12,8 @@
     "next": "16.0.1",
     "react": "19.2.0",
     "react-dom": "19.2.0",
-    "@supabase/supabase-js": "^2.45.0"
+    "@supabase/supabase-js": "^2.45.0",
+    "openai": "^4.56.0"
   },
   "devDependencies": {
     "@types/node": "^20",
