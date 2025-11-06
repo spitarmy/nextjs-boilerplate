@@ -1,115 +1,110 @@
-// app/components/UploadForm.tsx
 'use client';
 
 import React from 'react';
-import { supabase } from '@/lib/supabase';
+import { createClient } from '@supabase/supabase-js';
+import type { ChangeEvent, FormEvent } from 'react';
 
-type AppraiseResponse = {
-  verdict: string;
-  confidence: number;
-  summary: string;
-  suggestedPrice?: number;
-};
+// Supabase クライアント（クライアント側用）
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
+
+// 画像をアップして public URL を返す
+async function uploadToSupabase(file: File): Promise<string> {
+  // バケットは "uploads"
+  const fileExt = file.name.split('.').pop() || 'jpg';
+  const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}.${fileExt}`;
+  const filePath = `mobile/${fileName}`;
+
+  const { error } = await supabase.storage.from('uploads').upload(filePath, file, {
+    cacheControl: '3600',
+    upsert: false
+  });
+  if (error) throw error;
+
+  const { data } = supabase.storage.from('uploads').getPublicUrl(filePath);
+  if (!data?.publicUrl) throw new Error('Failed to get public URL');
+  return data.publicUrl;
+}
 
 export default function UploadForm() {
   const [file, setFile] = React.useState<File | null>(null);
   const [status, setStatus] = React.useState<string>('');
-  const [result, setResult] = React.useState<AppraiseResponse | null>(null);
+  const [result, setResult] = React.useState<string>('');
 
-  const onSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const onChange = (e: ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0] || null;
     setFile(f);
-    setResult(null);
-    setStatus(f ? 選択: ${f.name} : '');
+    setResult('');
   };
 
-  const handleUploadAndAppraise = async () => {
+  const onSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!file) {
+      setStatus('画像を選択してください');
+      return;
+    }
     try {
-      if (!file) {
-        setStatus('画像を選択してください');
-        return;
-      }
-      setStatus('アップロード中…');
+      setStatus('画像をアップロード中...');
+      const publicUrl = await uploadToSupabase(file);
 
-      // 1) Supabase Storage へアップ
-      const ext = file.name.split('.').pop() || 'jpg';
-      const path = `mobile/${Date.now()}.${ext}`;
-      const { error: upErr } = await supabase.storage
-        .from('uploads')
-        .upload(path, file, { cacheControl: '3600', upsert: false });
-      if (upErr) throw upErr;
-
-      // 2) 公開URL取得
-      const { data: pub } = supabase.storage.from('uploads').getPublicUrl(path);
-      const imageUrl = pub.publicUrl;
-
-      setStatus('AIで査定中…');
-
-      // 3) 自前API呼び出し
-      const res = await fetch('/api/appraise', {
+      setStatus('AIで査定中...');
+      const res = await fetch('/api/assess', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ imageUrl }),
+        body: JSON.stringify({ image_url: publicUrl })
       });
+
       if (!res.ok) {
         const t = await res.text();
-        throw new Error(`API error: ${t}`);
+        throw new Error(`API error: ${res.status} ${t}`);
       }
-      const json = (await res.json()) as AppraiseResponse;
-      setResult(json);
+      const data = await res.json();
+      setResult(data.assessment || '結果なし');
       setStatus('完了');
-    } catch (e: any) {
-      setStatus(`エラー: ${e.message || e}`);
+    } catch (err: any) {
+      setStatus(`エラー: ${err?.message || err}`);
     }
   };
 
   return (
-    <section style={{ padding: 16, maxWidth: 640 }}>
-      <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 12 }}>
-        写真からかんたん査定（ベータ）
-      </h2>
+    <form onSubmit={onSubmit} style={{ padding: 16, maxWidth: 640 }}>
+      <h1 style={{ fontSize: 22, marginBottom: 12 }}>写真でカンテノ査定</h1>
+      <p style={{ marginBottom: 8 }}>
+        スマホから撮影 or 画像を選択 → 「査定する」を押すだけ。
+      </p>
 
       <input
         type="file"
         accept="image/*"
         capture="environment"
-        onChange={onSelect}
-        style={{ marginBottom: 12 }}
+        onChange={onChange}
+        style={{ margin: '12px 0' }}
       />
 
-      <button
-        onClick={handleUploadAndAppraise}
-        style={{
-          padding: '10px 16px',
-          borderRadius: 8,
-          border: '1px solid #ddd',
-          background: 'black',
-          color: 'white',
-          fontWeight: 600,
-        }}
-      >
-        アップロードして査定する
-      </button>
-
-      <p style={{ marginTop: 10 }}>{status}</p>
-
-      {result && (
-        <div
+      <div>
+        <button
+          type="submit"
+          disabled={!file}
           style={{
-            marginTop: 16,
-            padding: 12,
-            border: '1px solid #eee',
-            borderRadius: 8,
-            background: '#fafafa',
+            padding: '10px 16px',
+            borderRadius: 6,
+            border: '1px solid #ddd',
+            cursor: file ? 'pointer' : 'not-allowed'
           }}
         >
-          <div><b>判定</b>: {result.verdict}（信頼度 {result.confidence}%）</div>
-          {typeof result.suggestedPrice === 'number' && (
-            <div><b>概算価格</b>: ¥{result.suggestedPrice.toLocaleString()}</div>
-          )}
-          <div style={{ marginTop: 6, whiteSpace: 'pre-wrap' }}>{result.summary}</div>
+          査定する
+        </button>
+      </div>
+
+      {status && <p style={{ marginTop: 12 }}>🛈 {status}</p>}
+      {result && (
+        <div style={{ marginTop: 16, padding: 12, border: '1px solid #eee', borderRadius: 8 }}>
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>査定結果</div>
+          <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: 0 }}>{result}</pre>
         </div>
       )}
-    </section>
+    </form>
   );
 }
