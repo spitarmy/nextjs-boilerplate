@@ -1,23 +1,26 @@
-// app/page.tsx  ― サーバーコンポーネント（デフォルト）
-import ClientStatus from '../components/ClientStatus';
+'use client'
+import React from 'react'
+import { createClient } from '@supabase/supabase-js'
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+)
 
 export default function Page() {
-  return <ClientStatus />;
-}
-
-export default function Home() {
-  const [status, setStatus] = React.useState('Checking…');
+  const [status, setStatus] = React.useState('Checking...')
 
   React.useEffect(() => {
-    supabase.auth.getSession()
-      .then(() => setStatus('✅ Supabase OK'))
-      .catch((err) => setStatus(`❌ ${err?.message ?? 'Error'}`));
-  }, []);
+    supabase.auth
+      .getSession()
+      .then(() => setStatus('✅ Supabase client loaded'))
+      .catch((err) => setStatus(`❌ ${err?.message || 'Error'}`))
+  }, [])
 
   return (
-    <main style={{ padding: 40, textAlign: 'center' }}>
+    <main style={{ padding: 40 }}>
       <h1>Connection Test</h1>
       <p>{status}</p>
     </main>
-  );
+  )
 }
