@@ -1,110 +1,166 @@
 'use client';
 
-import React from 'react';
-import { createClient } from '@supabase/supabase-js';
-import type { ChangeEvent, FormEvent } from 'react';
+import React, { useState } from 'react';
 
-// Supabase クライアント（クライアント側用）
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
-
-// 画像をアップして public URL を返す
-async function uploadToSupabase(file: File): Promise<string> {
-  // バケットは "uploads"
-  const fileExt = file.name.split('.').pop() || 'jpg';
-  const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}.${fileExt}`;
-  const filePath = `mobile/${fileName}`;
-
-  const { error } = await supabase.storage.from('uploads').upload(filePath, file, {
-    cacheControl: '3600',
-    upsert: false
-  });
-  if (error) throw error;
-
-  const { data } = supabase.storage.from('uploads').getPublicUrl(filePath);
-  if (!data?.publicUrl) throw new Error('Failed to get public URL');
-  return data.publicUrl;
-}
+type AppraisalJSON = {
+  item_title: string;
+  maker_or_brand?: string;
+  category?: string;
+  confidence: number;
+  authenticity_risk: '低' | '中' | '高';
+  condition_rank: 'S' | 'A' | 'B' | 'C' | 'J';
+  purchase_range_jpy: { min: number; max: number };
+  market_range_jpy?: { min: number; max: number };
+  hallmarks_to_check?: string[];
+  description: string;
+  caution: string[];
+  used_kb_refs?: number;
+};
 
 export default function UploadForm() {
-  const [file, setFile] = React.useState<File | null>(null);
-  const [status, setStatus] = React.useState<string>('');
-  const [result, setResult] = React.useState<string>('');
+  const [file, setFile] = useState<File | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [result, setResult] = useState<AppraisalJSON | null>(null);
 
-  const onChange = (e: ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0] || null;
-    setFile(f);
-    setResult('');
-  };
-
-  const onSubmit = async (e: FormEvent) => {
+  async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
+    setErrorMsg(null);
+    setResult(null);
+
     if (!file) {
-      setStatus('画像を選択してください');
+      setErrorMsg('画像ファイルを選択してください');
       return;
     }
-    try {
-      setStatus('画像をアップロード中...');
-      const publicUrl = await uploadToSupabase(file);
 
-      setStatus('AIで査定中...');
+    try {
+      setLoading(true);
+
+      // 1) 一時URLを作るためにブラウザでbase64化（今の構成に合わせて簡易に）
+      const b64 = await file.arrayBuffer().then((ab) => {
+        const bytes = new Uint8Array(ab);
+        let binary = '';
+        for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+        return btoa(binary);
+      });
+      const mime = file.type || 'image/jpeg';
+      const dataUrl = `data:${mime};base64,${b64}`;
+
+      // 2) API へ投げる
       const res = await fetch('/api/assess', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image_url: publicUrl })
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ image_url: dataUrl })
       });
 
-      if (!res.ok) {
-        const t = await res.text();
-        throw new Error(`API error: ${res.status} ${t}`);
-      }
-      const data = await res.json();
-      setResult(data.assessment || '結果なし');
-      setStatus('完了');
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'API error');
+
+      setResult(json.result as AppraisalJSON);
     } catch (err: any) {
-      setStatus(`エラー: ${err?.message || err}`);
+      setErrorMsg(err?.message ?? 'エラーが発生しました');
+    } finally {
+      setLoading(false);
     }
-  };
+  }
 
   return (
-    <form onSubmit={onSubmit} style={{ padding: 16, maxWidth: 640 }}>
-      <h1 style={{ fontSize: 22, marginBottom: 12 }}>写真でカンテノ査定</h1>
-      <p style={{ marginBottom: 8 }}>
+    <div style={{ maxWidth: 720, margin: '40px auto', padding: 16 }}>
+      <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 8 }}>写真でカンテノ 査定</h1>
+      <p style={{ color: '#444', marginBottom: 16 }}>
         スマホから撮影 or 画像を選択 → 「査定する」を押すだけ。
       </p>
 
-      <input
-        type="file"
-        accept="image/*"
-        capture="environment"
-        onChange={onChange}
-        style={{ margin: '12px 0' }}
-      />
-
-      <div>
+      <form onSubmit={onSubmit} style={{ marginBottom: 24 }}>
+        <input
+          type="file"
+          accept="image/*"
+          onChange={(e) => setFile(e.target.files?.[0] || null)}
+        />
         <button
           type="submit"
-          disabled={!file}
+          disabled={loading}
+          style={{ marginLeft: 12, padding: '6px 14px' }}
+        >
+          {loading ? '解析中…' : '査定する'}
+        </button>
+      </form>
+
+      {errorMsg && (
+        <div style={{ color: '#b00020', marginBottom: 16 }}>■ エラー: {errorMsg}</div>
+      )}
+
+      {result && (
+        <div
           style={{
-            padding: '10px 16px',
-            borderRadius: 6,
             border: '1px solid #ddd',
-            cursor: file ? 'pointer' : 'not-allowed'
+            borderRadius: 8,
+            padding: 16,
+            background: '#fff'
           }}
         >
-          査定する
-        </button>
-      </div>
+          <h2 style={{ marginTop: 0, fontSize: 18 }}>{result.item_title}</h2>
+          <p style={{ margin: '4px 0' }}>
+            <b>カテゴリ:</b> {result.category || '-'}　<b>ブランド/作家:</b>{' '}
+            {result.maker_or_brand || '-'}
+          </p>
+          <p style={{ margin: '4px 0' }}>
+            <b>真贋リスク:</b> {result.authenticity_risk}　<b>状態ランク:</b>{' '}
+            {result.condition_rank}　<b>信頼度:</b>{' '}
+            {(result.confidence * 100).toFixed(0)}%
+          </p>
 
-      {status && <p style={{ marginTop: 12 }}>🛈 {status}</p>}
-      {result && (
-        <div style={{ marginTop: 16, padding: 12, border: '1px solid #eee', borderRadius: 8 }}>
-          <div style={{ fontWeight: 600, marginBottom: 6 }}>査定結果</div>
-          <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: 0 }}>{result}</pre>
+          <p style={{ margin: '4px 0' }}>
+            <b>仕入れ上限目安:</b>{' '}
+            {result.purchase_range_jpy.min.toLocaleString()}〜
+            {result.purchase_range_jpy.max.toLocaleString()} 円
+          </p>
+
+          {result.market_range_jpy && (
+            <p style={{ margin: '4px 0' }}>
+              <b>市場売価想定:</b>{' '}
+              {result.market_range_jpy.min.toLocaleString()}〜
+              {result.market_range_jpy.max.toLocaleString()} 円
+            </p>
+          )}
+
+          {result.hallmarks_to_check?.length ? (
+            <p style={{ margin: '4px 0' }}>
+              <b>要チェック刻印/特徴:</b> {result.hallmarks_to_check.join(' / ')}
+            </p>
+          ) : null}
+
+          <div style={{ marginTop: 12 }}>
+            <b>商品概要（コピペ用）</b>
+            <pre
+              style={{
+                whiteSpace: 'pre-wrap',
+                background: '#f7f7f7',
+                padding: 12,
+                borderRadius: 6,
+                marginTop: 6
+              }}
+            >
+{result.description}
+            </pre>
+          </div>
+
+          {result.caution?.length ? (
+            <div style={{ marginTop: 8 }}>
+              <b>注意点</b>
+              <ul style={{ marginTop: 6 }}>
+                {result.caution.map((c, i) => (
+                  <li key={i}>{c}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          <p style={{ color: '#666', marginTop: 8 }}>
+            参照した教師データ件数: {result.used_kb_refs ?? 0}
+          </p>
         </div>
       )}
-    </form>
+    </div>
   );
 }
