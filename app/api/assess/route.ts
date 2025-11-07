@@ -1,47 +1,50 @@
-import OpenAI from "openai";
+// /app/api/assess/route.ts
+export const runtime = 'nodejs';
 
-export const runtime = "nodejs";
+import OpenAI from 'openai';
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 export async function POST(req: Request) {
   try {
-    const { image_url } = await req.json() as { image_url?: string };
-    if (!image_url) {
-      return new Response(JSON.stringify({ error: "image_url is required" }), { status: 400 });
+    const body = (await req.json()) as { image_url?: string };
+    const imageUrl = body?.image_url;
+    if (!imageUrl) {
+      return new Response(JSON.stringify({ error: 'image_url is required' }), { status: 400 });
     }
 
-    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
+    // システム方針（短め）
+    const system =
+      'あなたはリユース査定員。画像と説明をもとに一般向けの査定サマリを日本語で簡潔に出力する。';
 
-    const systemPrompt =
-      "画像から中古ブランド/時計/陶磁器/絵画などの基本特定ポイントと概算価格帯を100〜120字で。";
-    const userPrompt =
-      "この写真のアイテムを査定してください。ブランド/型番/年代/素材/真贋観点/ランク/国内相場/仕入れ目安も。";
+    // ユーザーへのプロンプト（要約＋出力フォーマット指示）
+    const prompt =
+      [
+        '次を見て「アイテム種別/ブランド候補」「真贋観点（箇条書き）」「状態ランク（S/A/B/C）」「国内相場レンジ（円）」「仕入上限目安（円）」を簡潔に。40〜120字で。',
+        '不確実な点は「確認ポイント」に回して、断定しない書き方にする。'
+      ].join('\n');
 
-    // 👇 型エラーを避けるために「as any」を追加
-    const vis = await client.responses.create({
-      model: "gpt-4o-mini",
+    const resp = await openai.responses.create({
+      model: 'gpt-4.1-mini',
       input: [
+        { role: 'system', content: [{ type: 'input_text', text: system }] },
         {
-          role: "system",
-          content: [{ type: "input_text", text: systemPrompt } as any],
-        },
-        {
-          role: "user",
+          role: 'user',
           content: [
-            { type: "input_text", text: userPrompt } as any,
-            { type: "input_image", image_url } as any,
-          ],
-        },
-      ],
+            { type: 'input_text', text: prompt },
+            { type: 'input_image', image_url: imageUrl }
+          ]
+        }
+      ]
     });
 
-    // 出力テキストを抽出
-    const text = vis.output_text;
+    // Responses API は output_text で本文を取れる
+    const text = resp.output_text ?? '(no output)';
 
-    return Response.json({ ok: true, result: text });
+    return Response.json({ result: text });
   } catch (err: any) {
-    console.error(err);
     return new Response(
-      JSON.stringify({ error: err?.message ?? "unknown error" }),
+      JSON.stringify({ error: err?.message ?? 'unexpected error' }),
       { status: 500 }
     );
   }
