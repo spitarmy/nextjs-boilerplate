@@ -11,33 +11,30 @@ export async function POST(req: Request) {
 
     const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
-    // あなたのシステムプロンプト（そのまま流用OK）
     const systemPrompt =
-      "画像から中古ブランド/時計/陶磁器/絵画などの基本特定ポイントと概算価格帯を100~120字で。";
-
-    // ユーザープロンプト（そのまま流用OK）
+      "画像から中古ブランド/時計/陶磁器/絵画などの基本特定ポイントと概算価格帯を100〜120字で。";
     const userPrompt =
       "この写真のアイテムを査定してください。ブランド/型番/年代/素材/真贋観点/ランク/国内相場/仕入れ目安も。";
 
-    // ★ここが重要： 'input_text' / 'input_image' を使う
+    // 👇 型エラーを避けるために「as any」を追加
     const vis = await client.responses.create({
       model: "gpt-4o-mini",
       input: [
         {
           role: "system",
-          content: [{ type: "input_text", text: systemPrompt }],
+          content: [{ type: "input_text", text: systemPrompt } as any],
         },
         {
           role: "user",
           content: [
-            { type: "input_text", text: userPrompt },
-            { type: "input_image", image_url: image_url },
+            { type: "input_text", text: userPrompt } as any,
+            { type: "input_image", image_url } as any,
           ],
         },
       ],
     });
 
-    // 出力テキストの取り出し（SDKのショートカット）
+    // 出力テキストを抽出
     const text = vis.output_text;
 
     return Response.json({ ok: true, result: text });
