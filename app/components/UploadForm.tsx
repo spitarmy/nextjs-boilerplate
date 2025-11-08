@@ -1,23 +1,19 @@
-'use client';
-
-import React, { useState } from 'react';
+// ファイル先頭に一度だけ
+// 'use client' は既にある想定
 import imageCompression from 'browser-image-compression';
 
-type AssessResult = {
-  output_text?: string;
-  [k: string]: any;
-};
-
-// ===== 圧縮ヘルパ（安全版・ログなし） =====
+// ===== ここから置き換え =====
 async function compressImage(file: File): Promise<File> {
   const options = { maxSizeMB: 1, maxWidthOrHeight: 1600, useWebWorker: true };
 
   try {
-    // 画像を圧縮（戻りは Blob）
+    // 画像を圧縮（戻りは Blob 互換）
     const compressedBlob = (await imageCompression(file, options)) as Blob;
 
-    // 拡張子 .heic / .heif を jpg に付け替え
-    const base = (file.name || 'image').replace(/\.(heic|heif)$/i, '').replace(/\.[^.]+$/,'');
+    // 拡張子 .heic / .heif などは jpg に揃える（他拡張子はそのままベース名だけ取得）
+    const base = (file.name || 'image')
+      .replace(/\.(heic|heif|HEIC|HEIF)$/i, '')
+      .replace(/\.[^.]+$/, ''); // 末尾の拡張子を外す
     const outName = `${base}.jpg`;
 
     // Blob -> File に変換（Content-Type は JPEG 固定）
@@ -26,10 +22,12 @@ async function compressImage(file: File): Promise<File> {
       lastModified: Date.now(),
     });
   } catch (e) {
+    // 失敗時は元ファイルを返す（ここで落ちないようにする）
     console.warn('圧縮に失敗。元画像を使用します:', e);
-    return file; // フォールバック
+    return file;
   }
 }
+// ===== 置き換えここまで =====
 // =====================================================
 // env を拾う（！必ず NEXT_PUBLIC_ 付き）
 const SUPABASE_URL  = process.env.NEXT_PUBLIC_SUPABASE_URL!;
