@@ -8,31 +8,25 @@ type AssessResult = {
   [k: string]: any;
 };
 
-// ===== 2-2 圧縮ヘルパー（完全版） =====
-async function compressImage(file: File) {
+// ===== 圧縮ヘルパ（安全版・ログなし） =====
+async function compressImage(file: File): Promise<File> {
   const options = { maxSizeMB: 1, maxWidthOrHeight: 1600, useWebWorker: true };
 
   try {
-    // 圧縮実行
-    const compressed = await imageCompression(file, options);
+    // 画像を圧縮（戻りは Blob）
+    const compressedBlob = (await imageCompression(file, options)) as Blob;
 
-    // ★ここがエラー元でした：テンプレート文字列の ${} とカッコの数を厳密に修正
-    console.log(
-      `圧縮前: ${(file.size / 1024 / 1024).toFixed(2)}MB  >  圧縮後: ${(compressed.size / 1024 / 1024).toFixed(2)}MB`
-    );
+    // 拡張子 .heic / .heif を jpg に付け替え
+    const base = (file.name || 'image').replace(/\.(heic|heif)$/i, '').replace(/\.[^.]+$/,'');
+    const outName = `${base}.jpg`;
 
-    // File に揃えて返す（Blob -> File）
-    const nameBase = (file.name || 'image').replace(/\.(heic|HEIC|heif|HEIF)$/,'');
-    const name = `${nameBase}.jpg`;
-
-    const fileLike = new File([compressed], name, {
-      type: compressed.type || 'image/jpeg',
+    // Blob -> File に変換（Content-Type は JPEG 固定）
+    return new File([compressedBlob], outName, {
+      type: 'image/jpeg',
       lastModified: Date.now(),
     });
-
-    return fileLike;
   } catch (e) {
-    console.warn('圧縮失敗。元画像を使用します:', e);
+    console.warn('圧縮に失敗。元画像を使用します:', e);
     return file; // フォールバック
   }
 }
