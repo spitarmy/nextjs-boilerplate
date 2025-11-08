@@ -42,6 +42,49 @@ async function compressImage(file: File) {
   }
 }
 // =====================================================
+// env を拾う（！必ず NEXT_PUBLIC_ 付き）
+const SUPABASE_URL  = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const SUPABASE_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+
+// 画像をブラウザで圧縮（1.2MB / 長辺1600px 目安）
+async function compressImage(file: File): Promise<File> {
+  const options = { maxSizeMB: 1.2, maxWidthOrHeight: 1600, useWebWorker: true, initialQuality: 0.8 };
+  try {
+    const compressed = await imageCompression(file, options);
+    console.log(
+      圧縮前: ${(file.size/1024/1024).toFixed(2)}MB → 圧縮後: ${(compressed.size/1024/1024).toFixed(2)}MB
+    ); // ← バッククォート ` を使用
+    return compressed as File;
+  } catch (e) {
+    console.warn('圧縮に失敗: 元画像を使用します', e);
+    return file;
+  }
+}
+
+// Supabase Storage にアップロードして 公開URL を返す
+async function uploadToSupabase(file: File): Promise<string> {
+  const ext = (file.type?.split('/')[1] || 'jpg');
+  const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+  const filePath = `uploads/${fileName}`;                 // ← bucket=uploads 前提（あなたの設定どおり）
+
+  const res = await fetch(`${SUPABASE_URL}/storage/v1/object/${encodeURIComponent(filePath)}`, {
+    method: 'POST',                                       // 既存オブジェクトがあれば上書き
+    headers: {
+      'Authorization': `Bearer ${SUPABASE_ANON}`,
+      'Content-Type': file.type || 'application/octet-stream',
+      'x-upsert': 'true',
+    },
+    body: file,
+  });
+
+  if (!res.ok) {
+    const t = await res.text().catch(()=>'');
+    throw new Error(`Supabase upload failed: ${res.status} ${t}`);
+  }
+
+  // 公開URL（uploads バケットを public にしてある前提）
+  return `${SUPABASE_URL}/storage/v1/object/public/${filePath}`;
+}
 
 export default function UploadForm() {
   const [file, setFile] = useState<File | null>(null);
@@ -85,26 +128,9 @@ export default function UploadForm() {
       const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`;
       const filePath = `mobile/${fileName}`;
 
-      // Supabase Storage に直接 PUT
-      const up = await fetch(
-        `${url}/storage/v1/object/uploads/${encodeURIComponent(filePath)}`,
-        {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${anon}`,
-            'Content-Type': compressedFile.type || 'image/jpeg',
-          },
-          body: compressedFile,
-        }
-      );
-      if (!up.ok) {
-        const t = await up.text().catch(()=>'');
-        throw new Error(`Upload failed: ${up.status} ${t}`);
-      }
-
-      const publicUrl =
-        `${url}/storage/v1/object/public/uploads/${encodeURIComponent(filePath)}`;
-
+      // ① 3MB超なら圧縮 → ② Supabase アップロード → ③ 公開URL取得
+const useFile = file.size > 3 * 1024 * 1024 ? await compressImage(file) : file;
+const imageUrl = await uploadToSupabase(useFile);
       // 画像URLを /api/assess に渡して AI 推論
       const resp = await fetch('/api/assess', {
         method: 'POST',
