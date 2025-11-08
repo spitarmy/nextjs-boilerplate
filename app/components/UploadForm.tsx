@@ -13,7 +13,7 @@ async function compressImage(file: File): Promise<File> {
   try {
     const compressed = await imageCompression(file, options);
     console.log(
-      圧縮: ${(file.size / 1024 / 1024).toFixed(2)}MB → ${(compressed.size / 1024 / 1024).toFixed(2)}MB`    );
+      `圧縮: ${(file.size / 1024 / 1024).toFixed(2)}MB → ${(compressed.size / 1024 / 1024).toFixed(2)}MB`    );
     return compressed;
   } catch (e) {
     console.error('画像圧縮に失敗。元画像を使用します。', e);
