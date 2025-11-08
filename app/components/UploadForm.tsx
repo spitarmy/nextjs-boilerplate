@@ -1,78 +1,63 @@
-// ファイル先頭に一度だけ
-// 'use client' は既にある想定
+'use client';
+
+import React, { useState } from 'react';
 import imageCompression from 'browser-image-compression';
 
-// ===== ここから置き換え =====
-async function compressImage(file: File): Promise<File> {
-  const options = { maxSizeMB: 1, maxWidthOrHeight: 1600, useWebWorker: true };
+type AssessResult = {
+  output_text?: string;
+  [k: string]: any;
+};
 
+// ============== 画像をブラウザで圧縮（~1.2MB / 長辺1600px 目安） ==============
+async function compressImage(file: File): Promise<File> {
+  const options = { maxSizeMB: 1.2, maxWidthOrHeight: 1600, useWebWorker: true, initialQuality: 0.8 };
   try {
-    // 画像を圧縮（戻りは Blob 互換）
     const compressedBlob = (await imageCompression(file, options)) as Blob;
 
-    // 拡張子 .heic / .heif などは jpg に揃える（他拡張子はそのままベース名だけ取得）
-    const base = (file.name || 'image')
-      .replace(/\.(heic|heif|HEIC|HEIF)$/i, '')
-      .replace(/\.[^.]+$/, ''); // 末尾の拡張子を外す
+    // 拡張子 .heic / .heif 等は jpg に変更（拡張子子だけ置き換え）
+    const base = (file.name || 'image').replace(/\.(heic|heif|HEIC|HEIF)$/i, '').replace(/\.[^.]+$/, '');
     const outName = `${base}.jpg`;
 
-    // Blob -> File に変換（Content-Type は JPEG 固定）
+    // Blob -> File（Content-Type は JPEG 固定）
     return new File([compressedBlob], outName, {
       type: 'image/jpeg',
       lastModified: Date.now(),
     });
   } catch (e) {
-    // 失敗時は元ファイルを返す（ここで落ちないようにする）
-    console.warn('圧縮に失敗。元画像を使用します:', e);
+    // 圧縮に失敗したら元画像をそのまま使う
     return file;
   }
 }
-// ===== 置き換えここまで =====
-// =====================================================
-// env を拾う（！必ず NEXT_PUBLIC_ 付き）
-const SUPABASE_URL  = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+
+// ============== Supabase にアップロードして 公開URL を返す ==============
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SUPABASE_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
-// 画像をブラウザで圧縮（1.2MB / 長辺1600px 目安）
-async function compressImage(file: File): Promise<File> {
-  const options = { maxSizeMB: 1.2, maxWidthOrHeight: 1600, useWebWorker: true, initialQuality: 0.8 };
-  try {
-    const compressed = await imageCompression(file, options);
-    console.log(
-      圧縮前: ${(file.size/1024/1024).toFixed(2)}MB → 圧縮後: ${(compressed.size/1024/1024).toFixed(2)}MB
-    ); // ← バッククォート ` を使用
-    return compressed as File;
-  } catch (e) {
-    console.warn('圧縮に失敗: 元画像を使用します', e);
-    return file;
-  }
-}
-
-// Supabase Storage にアップロードして 公開URL を返す
 async function uploadToSupabase(file: File): Promise<string> {
-  const ext = (file.type?.split('/')[1] || 'jpg');
+  const ext = (file.type?.split('/')?.[1] || 'jpg');
   const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
-  const filePath = `uploads/${fileName}`;                 // ← bucket=uploads 前提（あなたの設定どおり）
+  const filePath = `uploads/${fileName}`; // bucket=uploads 前提（バケットは public にしてある想定）
 
   const res = await fetch(`${SUPABASE_URL}/storage/v1/object/${encodeURIComponent(filePath)}`, {
-    method: 'POST',                                       // 既存オブジェクトがあれば上書き
+    method: 'POST',
     headers: {
       'Authorization': `Bearer ${SUPABASE_ANON}`,
       'Content-Type': file.type || 'application/octet-stream',
-      'x-upsert': 'true',
+      'x-upsert': 'true', // 同名なら上書き
     },
     body: file,
   });
 
   if (!res.ok) {
-    const t = await res.text().catch(()=>'');
+    const t = await res.text().catch(() => '');
     throw new Error(`Supabase upload failed: ${res.status} ${t}`);
   }
 
-  // 公開URL（uploads バケットを public にしてある前提）
+  // 公開URL（uploads バケットを public にしている想定）
   return `${SUPABASE_URL}/storage/v1/object/public/${filePath}`;
 }
 
+// ============== 画面本体 ==============
 export default function UploadForm() {
   const [file, setFile] = useState<File | null>(null);
   const [done, setDone] = useState(false);
@@ -89,8 +74,7 @@ export default function UploadForm() {
     setResult(null);
   }
 
-  // ========= 2-3 送信前に圧縮を挟む “場所” はここ =========
-  // onSubmit の最初で file を compressedFile に置き換えます。
+  // 送信 → 圧縮 → Supabase → /api/assess
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setErrorMsg(null);
@@ -105,31 +89,25 @@ export default function UploadForm() {
         return;
       }
 
-      // ★★★ ここが 2-3 のコア ★★★
+      // 1) まず圧縮
       const compressedFile = await compressImage(file);
-      // 以降、必ず compressedFile を使う
-      // =================================
 
-      const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-      const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-      const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`;
-      const filePath = `mobile/${fileName}`;
+      // 2) Supabase にアップロード（3MB超なら圧縮、のロジックは compressImage に集約済み）
+      const publicUrl = await uploadToSupabase(compressedFile);
 
-      // ① 3MB超なら圧縮 → ② Supabase アップロード → ③ 公開URL取得
-const useFile = file.size > 3 * 1024 * 1024 ? await compressImage(file) : file;
-const imageUrl = await uploadToSupabase(useFile);
-      // 画像URLを /api/assess に渡して AI 推論
+      // 3) 画像URLを API に渡して判定
       const resp = await fetch('/api/assess', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ image_url: publicUrl }),
       });
+
       if (!resp.ok) {
-        const t = await resp.text().catch(()=>'');
+        const t = await resp.text().catch(() => '');
         throw new Error(`API error: ${resp.status} ${t}`);
       }
 
-      const json = await resp.json();
+      const json = (await resp.json()) as AssessResult;
       setResult(json);
       setDone(true);
     } catch (err: any) {
@@ -138,7 +116,6 @@ const imageUrl = await uploadToSupabase(useFile);
       setLoading(false);
     }
   }
-  // =====================================================
 
   return (
     <form onSubmit={onSubmit}>
@@ -148,8 +125,8 @@ const imageUrl = await uploadToSupabase(useFile);
         {loading ? '査定中…' : '査定する'}
       </button>
 
-      {errorMsg && <p style={{color:'crimson'}}>⚠️ {errorMsg}</p>}
-      {done && <pre style={{whiteSpace:'pre-wrap'}}>{JSON.stringify(result, null, 2)}</pre>}
+      {errorMsg && <p style={{ color: 'crimson' }}>⚠️ {errorMsg}</p>}
+      {done && <pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(result, null, 2)}</pre>}
     </form>
   );
 }
