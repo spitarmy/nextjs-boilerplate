@@ -1,78 +1,76 @@
 'use client';
 
 import React, { useState } from 'react';
+import imageCompression from 'browser-image-compression';
 
-// 画像を Supabase にアップロードして公開URLを作るヘルパー
-async function uploadToSupabase(file: File) {
-  // 環境変数（Vercel の Project → Settings → Environment Variables で設定済み想定）
+/** 画像を圧縮（1.5MB以下・長辺1600px目安） */
+async function compressImage(file: File): Promise<File> {
+  const options = {
+    maxSizeMB: 1.5,
+    maxWidthOrHeight: 1600,
+    useWebWorker: true,
+  };
+  try {
+    const compressed = await imageCompression(file, options);
+    console.log(
+      圧縮: ${(file.size / 1024 / 1024).toFixed(2)}MB → ${(compressed.size / 1024 / 1024).toFixed(2)}MB
+    );
+    return compressed;
+  } catch (e) {
+    console.error('画像圧縮に失敗。元画像を使用します。', e);
+    return file; // 失敗時は元画像で継続
+  }
+}
+
+/** Supabase Storage にアップロードして「公開URL」を返す */
+async function uploadToSupabase(file: File): Promise<string> {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+  if (!url || !key) throw new Error('SupabaseのURL/Anonキーが未設定です');
 
-  // ファイル名（衝突しにくいように時刻＋乱数）
-  const ext = file.name.split('.').pop() || 'jpg';
+  // 拡張子は元ファイルから拾う（なければjpg）
+  const ext = (file.name.split('.').pop() || 'jpg').toLowerCase();
   const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
-  const filePath = `mobile/${fileName}`; // uploads バケット直下の mobile/ 配下に保存
+  // あなたのプロジェクトでは uploads バケットを使っていたのでそのまま利用
+  const filePath = `mobile/${fileName}`;
+  const bucket = 'uploads';
 
-  // Supabase Storage REST で直接アップロード
-  // 事前に：Storage → bucket 名が "uploads"、RLSポリシーで public READ & INSERT を許可済みであること
+  // Storage REST: POST /storage/v1/object/<bucket>/<path>
   const uploadRes = await fetch(
-    `${url}/storage/v1/object/uploads/${encodeURIComponent(filePath)}`,
+    `${url}/storage/v1/object/${bucket}/${encodeURIComponent(filePath)}`,
     {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${key}`,
-        'x-upsert': 'true',
-        'Content-Type': file.type || 'application/octet-stream'
+        apikey: key,
+        'Content-Type': file.type || 'application/octet-stream',
       },
-      body: file
+      body: file,
     }
   );
 
   if (!uploadRes.ok) {
     const t = await uploadRes.text().catch(() => '');
-    throw new Error(`Storage upload failed: ${uploadRes.status} ${t}`);
+    throw new Error(`Supabase upload error: ${uploadRes.status} ${t}`);
   }
 
-  // 公開URL（uploads バケットが Public であること前提）
-  const publicUrl = `${url}/storage/v1/object/public/uploads/${encodeURIComponent(
-    filePath
-  )}`;
+  // 公開URL（バケットが public 前提）
+  const publicUrl = `${url}/storage/v1/object/public/${bucket}/${filePath}`;
   return publicUrl;
 }
 
 type AssessResult = {
-  summary: string;
-  search_query: string;
-  matches: {
-    id: string;
-    source_file: string | null;
-    category: string | null;
-    subcategory: string | null;
-    brand_or_author: string | null;
-    model_or_series: string | null;
-    workshop_or_kilin: string | null;
-    item_type: string | null;
-    material: string | null;
-    hallmark: string | null;
-    period: string | null;
-    region: string | null;
-    tags: string | null;
-    desc_short: string | null;
-    desc_long: string | null;
-    price_low_high: string | null;
-    refs: string | null;
-    hallmark_or_font: string | null;
-    notes: string | null;
-    score: number | null;
-  }[];
+  ok: boolean;
+  text?: string;
+  error?: string;
 };
 
 export default function UploadForm() {
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [done, setDone] = useState(false);
   const [result, setResult] = useState<AssessResult | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -82,19 +80,22 @@ export default function UploadForm() {
 
     try {
       if (!file) {
-        setErrorMsg('画像ファイルを選んでください。');
+        setErrorMsg('画像ファイルを選択してください。');
         return;
       }
       setLoading(true);
 
-      // 1) 画像を Supabase にアップ → 公開URL取得
-      const imageUrl = await uploadToSupabase(file);
+      // ① 画像を圧縮
+      const compressed = await compressImage(file);
 
-      // 2) 画像URLを API に渡して解析＆ナレッジ検索
+      // ② Supabaseへアップロード → 公開URL取得
+      const imageUrl = await uploadToSupabase(compressed);
+
+      // ③ APIへ判定依頼（/api/assess）
       const resp = await fetch('/api/assess', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image_url: imageUrl })
+        body: JSON.stringify({ image_url: imageUrl }),
       });
 
       if (!resp.ok) {
@@ -106,7 +107,8 @@ export default function UploadForm() {
       setResult(json);
       setDone(true);
     } catch (err: any) {
-      setErrorMsg(err?.message ?? String(err));
+      console.error(err);
+      setErrorMsg(err?.message ?? 'エラーが発生しました');
     } finally {
       setLoading(false);
     }
@@ -114,54 +116,30 @@ export default function UploadForm() {
 
   return (
     <form onSubmit={onSubmit}>
-      <h2>写真でカンテノ / 査定</h2>
-      <p>スマホから撮影 or 画像を選択 →「査定する」を押すだけ。</p>
+      <p>写真でカンテノ / 査定</p>
+      <p>スマホから撮影 or 画像を選択 → 「査定する」を押すだけ。</p>
 
-      <label style={{ display: 'block', marginBottom: 8 }}>
-        ファイルを選択{' '}
-        <input
-          type="file"
-          accept="image/*"
-          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-        />
-      </label>
+      <input
+        type="file"
+        accept="image/*"
+        onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+      />
 
-      <button type="submit" disabled={loading}>
-        {loading ? '解析中…' : '査定する'}
-      </button>
+      <div style={{ marginTop: 12 }}>
+        <button type="submit" disabled={loading}>
+          {loading ? 'アップロード中…' : '査定する'}
+        </button>
+      </div>
 
       {errorMsg && (
-        <p style={{ color: 'crimson', marginTop: 12 }}>⚠ エラー: {errorMsg}</p>
+        <p style={{ color: 'crimson', whiteSpace: 'pre-wrap' }}>⚠️ エラー：{errorMsg}</p>
       )}
 
-      {done && <p style={{ color: 'green', marginTop: 8 }}>✅ 完了</p>}
-
-      {/* ここから結果表示 */}
-      {result && (
-        <section style={{ marginTop: 16, padding: 12, border: '1px solid #ddd', borderRadius: 8 }}>
-          <h3 style={{ marginTop: 0 }}>査定結果（要約）</h3>
-          <p>{result.summary}</p>
-
-          <h4>検索キーワード</h4>
-          <p>{result.search_query}</p>
-
-          <h4>参考データ（ナレッジ照合 上位）</h4>
-          <ul style={{ paddingLeft: 18 }}>
-            {result.matches.map((m) => (
-              <li key={m.id} style={{ marginBottom: 10 }}>
-                <div>
-                  <b>
-                    {m.brand_or_author ?? '-'} / {m.model_or_series ?? '-'} / {m.item_type ?? '-'}
-                  </b>
-                </div>
-                <div>{m.desc_short || m.desc_long || ''}</div>
-                <div style={{ fontSize: 12, color: '#666' }}>
-                  スコア: {m.score?.toFixed?.(2) ?? '-'} ｜ 出典: {m.source_file ?? '-'}
-                </div>
-              </li>
-            ))}
-          </ul>
-        </section>
+      {done && result && (
+        <div style={{ marginTop: 12 }}>
+          <p>✔ 完了</p>
+          {result.text && <pre style={{ whiteSpace: 'pre-wrap' }}>{result.text}</pre>}
+        </div>
       )}
     </form>
   );
