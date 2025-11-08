@@ -1,103 +1,65 @@
-// /app/api/assess/route.ts
-export const runtime = 'edge';
-
+import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
 
-type Price = { currency: 'JPY'; min: number; max: number; reason?: string };
-type AssessJSON = {
-  title?: string;
-  brand?: string;
-  material?: string;
-  item_type?: string;
-  era?: string;
-  condition?: string;
-  authenticity_confidence?: number; // 0.0 - 1.0
-  price_estimate?: Price;
-  notes?: string[];
+export const runtime = 'edge';           // 早い・安定
+export const dynamic = 'force-dynamic';  // キャッシュ回避
+
+const client = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY!,
+});
+
+type ReqBody = {
+  image_url?: string;
 };
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   try {
-    const { image_url } = await req.json().catch(() => ({}));
-    if (!image_url || typeof image_url !== 'string') {
-      return new Response('missing image_url', { status: 400 });
-    }
+    const body = (await req.json()) as ReqBody;
+    const imageUrl = body.image_url?.trim();
 
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    if (!process.env.OPENAI_API_KEY) {
-      return new Response('missing OPENAI_API_KEY', { status: 500 });
-    }
-
-    const system =
-      'あなたは中古リユース査定の専門アシスタント「カンテノ」です。' +
-      '画像からアイテムを分析し、日本語で、JSONのみを返します。' +
-      '価格は日本の中古相場（ヤフオク/メルカリ/ラクマ等の一般的レンジ）を仮定し税込想定の円建て(JPY)。' +
-      '写真で確定できない場合は「推定」を明記し、レンジを広めに。' +
-      '真贋は断定せず、confidence(0-1)で表現。';
-
-    const user =
-      '次のJSONスキーマで必ず返答してください（余計な文字なしで1つのJSONだけ）。\n' +
-      JSON.stringify(
-        {
-          title: '短いタイトル',
-          brand: 'ブランド名 or 不明',
-          material: '主素材の推定',
-          item_type: '品目（例：長財布/ショルダー/化粧ポーチ 等）',
-          era: '年代/世代の推定（例：2000年代前半 等）',
-          condition:
-            '外観の総合評価（例：使用感中/角スレ小/金具小傷 など具体）',
-          authenticity_confidence:
-            '0.0〜1.0で真贋自信度（画像のみの推定であること）',
-          price_estimate: {
-            currency: 'JPY',
-            min: '数値(下限)',
-            max: '数値(上限)',
-            reason: 'レンジ根拠の要点（状態・流通の一般傾向）'
-          },
-          notes: [
-            '不足写真（型番/刻印/シリアル/縫製/金具/内装全体/付属品）',
-            '買取提示時の注意点 など'
-          ]
-        },
-        null,
-        2
+    if (!imageUrl) {
+      return NextResponse.json(
+        { error: 'image_url is required' },
+        { status: 400 }
       );
+    }
 
-    const prompt =
-      'この画像の中古リユース査定をJSONで。価格は円建てレンジ。' +
-      'レンジは控えめ（安全側）。写真で確証が薄い点は「推定」と明記。';
-
-    const resp = await openai.responses.create({
+    // --- Chat Completions（画像+テキスト） ---
+    const completion = await client.chat.completions.create({
       model: 'gpt-4o-mini',
-      response_format: { type: 'json_object' },
-      input: [
+      temperature: 0.2,
+      messages: [
         {
           role: 'system',
-          content: [{ type: 'input_text', text: system }]
+          content:
+            'あなたは中古リユース査定「カンテノ」です。画像から推定ブランド/素材/型/年代/状態/付属品/真贋の要点を日本語で、最後に概算価格帯(円)を出力します。根拠を簡潔に示し、確信度も%で付けてください。出力は整形済みテキストのみ。',
         },
         {
           role: 'user',
           content: [
-            { type: 'input_text', text: user + '\n\n' + prompt },
-            { type: 'input_image', image_url }
-          ]
-        }
+            {
+              type: 'text',
+              text:
+                'この1枚の画像から分かる範囲で査定してください。足りない視点があれば追撮の指示もください。',
+            },
+            {
+              type: 'image_url',
+              image_url: { url: imageUrl },
+            },
+          ],
+        },
       ],
-      temperature: 0.2,
-      max_output_tokens: 800
     });
 
-    const text = resp.output_text || '{}';
-    const json = JSON.parse(text) as AssessJSON;
+    const text = completion.choices[0]?.message?.content ?? '';
 
-    return new Response(JSON.stringify(json), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' }
+    // フロントが扱いやすい形（既存互換）
+    return NextResponse.json({
+      output_text: text,
     });
   } catch (err: any) {
-    return new Response(
-      JSON.stringify({ error: err?.message || 'unknown error' }),
-      { status: 500, headers: { 'Content-Type': 'application/json' } }
-    );
+    const msg =
+      typeof err?.message === 'string' ? err.message : 'Unknown server error';
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
