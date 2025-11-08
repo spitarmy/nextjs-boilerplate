@@ -30,32 +30,35 @@ async function compressImage(file: File): Promise<File> {
 }
 
 // ============== Supabase にアップロードして 公開URL を返す ==============
+// ← ここから置き換え（既存の uploadToSupabase 内 or その直前のPOST部分）
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SUPABASE_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+const bucket = "uploads";
 
-async function uploadToSupabase(file: File): Promise<string> {
-  const ext = (file.type?.split('/')?.[1] || 'jpg');
-  const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
-  const filePath = `uploads/${fileName}`; // bucket=uploads 前提（バケットは public にしてある想定）
+// 拡張子とファイル名
+const ext = (file.type?.split("/")?.[1] ?? "jpg").toLowerCase();
+const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
 
-  const res = await fetch(`${SUPABASE_URL}/storage/v1/object/${encodeURIComponent(filePath)}`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${SUPABASE_ANON}`,
-      'Content-Type': file.type || 'application/octet-stream',
-      'x-upsert': 'true', // 同名なら上書き
-    },
-    body: file,
-  });
+// ★ 重要：bucket と fileName を「別セグメント」に分ける（/ を encode しない）
+const uploadUrl = `${SUPABASE_URL}/storage/v1/object/${bucket}/${encodeURIComponent(fileName)}`;
 
-  if (!res.ok) {
-    const t = await res.text().catch(() => '');
-    throw new Error(`Supabase upload failed: ${res.status} ${t}`);
-  }
+const res = await fetch(uploadUrl, {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${SUPABASE_ANON}`,
+    "Content-Type": file.type || "application/octet-stream",
+    "x-upsert": "true",
+  },
+  body: file, // 圧縮後なら compressedFile を渡す
+});
 
-  // 公開URL（uploads バケットを public にしている想定）
-  return `${SUPABASE_URL}/storage/v1/object/public/${filePath}`;
+if (!res.ok) {
+  const t = await res.text().catch(() => "");
+  throw new Error(`Supabase upload failed: ${res.status} ${t}`);
 }
+
+// 公開URL（バケットが public の場合）
+const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/${bucket}/${encodeURIComponent(fileName)}`;
 
 // ============== 画面本体 ==============
 export default function UploadForm() {
