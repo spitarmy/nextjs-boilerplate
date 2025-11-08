@@ -3,25 +3,36 @@
 import React, { useState } from 'react';
 import imageCompression from 'browser-image-compression';
 
-/** 画像を圧縮（1.5MB以下・長辺1600px目安） */
-async function compressImage(file: File): Promise<File> {
+// 画像を圧縮して File を返すヘルパー
+async function compressImage(file: File) {
+  // モバイル想定で現実的な設定（最大2MB・長辺1600px）
   const options = {
-    maxSizeMB: 1.5,
+    maxSizeMB: 2,
     maxWidthOrHeight: 1600,
     useWebWorker: true,
-  };
+    maxIteration: 10,
+    initialQuality: 0.85,
+  } as const;
+
   try {
-   const compressed = await imageCompression(file, options);
+    const compressed = await imageCompression(file, options);
 
-// ここはバッククォート（`）で囲む！ シングル/ダブルクォートではダメ
-console.log(
-  `圧縮: ${(file.size / 1024 / 1024).toFixed(2)}MB → ${(compressed.size / 1024 / 1024).toFixed(2)}MB`
-);
+    // デバッグログ（テンプレートリテラルのバッククォートを必ず閉じる！）
+    console.log(
+      圧縮前: ${(file.size / 1024 / 1024).toFixed(2)}MB → 圧縮後: ${(compressed.size / 1024 / 1024).toFixed(2)}MB
+    );
 
-return compressed;
+    // File型を維持したいので File に包み直す
+    const compressedBlob = compressed instanceof Blob ? compressed : await fetch(compressed as any).then(r => r.blob());
+    const compressedFile = new File([compressedBlob], file.name.replace(/\.(heic|HEIC)$/,'_conv.jpg'), {
+      type: compressedBlob.type || 'image/jpeg',
+      lastModified: Date.now(),
+    });
+
+    return compressedFile;
   } catch (e) {
-    console.error('画像圧縮に失敗。元画像を使用します。', e);
-    return file; // 失敗時は元画像で継続
+    console.warn('圧縮に失敗したので元画像を使用します:', e);
+    return file; // 失敗時はそのまま
   }
 }
 
