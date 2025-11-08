@@ -1,55 +1,103 @@
-export const runtime = 'nodejs';
+// /app/api/assess/route.ts
+export const runtime = 'edge';
 
 import OpenAI from 'openai';
 
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY!,
-});
+type Price = { currency: 'JPY'; min: number; max: number; reason?: string };
+type AssessJSON = {
+  title?: string;
+  brand?: string;
+  material?: string;
+  item_type?: string;
+  era?: string;
+  condition?: string;
+  authenticity_confidence?: number; // 0.0 - 1.0
+  price_estimate?: Price;
+  notes?: string[];
+};
 
-// 画像URLを受け取り、OpenAI に投げてテキストを返す
 export async function POST(req: Request) {
   try {
-    const body = (await req.json()) as { image_url?: string };
-    const imageUrl = body?.image_url;
-    if (!imageUrl) {
-      return new Response(JSON.stringify({ error: 'image_url is required' }), {
-        status: 400,
-        headers: { 'Content-Type': 'application/json' },
-      });
+    const { image_url } = await req.json().catch(() => ({}));
+    if (!image_url || typeof image_url !== 'string') {
+      return new Response('missing image_url', { status: 400 });
     }
 
-    const prompt =
-      '画像から読み取れるブランド/素材/型/年代/状態/付属品/真贋の観点を簡潔に日本語で整理してください。';
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    if (!process.env.OPENAI_API_KEY) {
+      return new Response('missing OPENAI_API_KEY', { status: 500 });
+    }
 
-    // SDK の型エラー回避のため as any を使用（挙動は問題なし）
-    const resp: any = await client.responses.create({
+    const system =
+      'あなたは中古リユース査定の専門アシスタント「カンテノ」です。' +
+      '画像からアイテムを分析し、日本語で、JSONのみを返します。' +
+      '価格は日本の中古相場（ヤフオク/メルカリ/ラクマ等の一般的レンジ）を仮定し税込想定の円建て(JPY)。' +
+      '写真で確定できない場合は「推定」を明記し、レンジを広めに。' +
+      '真贋は断定せず、confidence(0-1)で表現。';
+
+    const user =
+      '次のJSONスキーマで必ず返答してください（余計な文字なしで1つのJSONだけ）。\n' +
+      JSON.stringify(
+        {
+          title: '短いタイトル',
+          brand: 'ブランド名 or 不明',
+          material: '主素材の推定',
+          item_type: '品目（例：長財布/ショルダー/化粧ポーチ 等）',
+          era: '年代/世代の推定（例：2000年代前半 等）',
+          condition:
+            '外観の総合評価（例：使用感中/角スレ小/金具小傷 など具体）',
+          authenticity_confidence:
+            '0.0〜1.0で真贋自信度（画像のみの推定であること）',
+          price_estimate: {
+            currency: 'JPY',
+            min: '数値(下限)',
+            max: '数値(上限)',
+            reason: 'レンジ根拠の要点（状態・流通の一般傾向）'
+          },
+          notes: [
+            '不足写真（型番/刻印/シリアル/縫製/金具/内装全体/付属品）',
+            '買取提示時の注意点 など'
+          ]
+        },
+        null,
+        2
+      );
+
+    const prompt =
+      'この画像の中古リユース査定をJSONで。価格は円建てレンジ。' +
+      'レンジは控えめ（安全側）。写真で確証が薄い点は「推定」と明記。';
+
+    const resp = await openai.responses.create({
       model: 'gpt-4o-mini',
-      instructions: 'あなたは経験豊富なリユース査定士です。はっきり簡潔に回答します。',
+      response_format: { type: 'json_object' },
       input: [
+        {
+          role: 'system',
+          content: [{ type: 'input_text', text: system }]
+        },
         {
           role: 'user',
           content: [
-            { type: 'input_text', text: prompt },
-            { type: 'input_image', image_url: imageUrl, detail: 'low' },
-          ],
-        },
+            { type: 'input_text', text: user + '\n\n' + prompt },
+            { type: 'input_image', image_url }
+          ]
+        }
       ],
-    } as any);
+      temperature: 0.2,
+      max_output_tokens: 800
+    });
 
-    const text =
-      resp?.output_text ??
-      resp?.output?.[0]?.content?.[0]?.text ??
-      'テキスト出力なし';
+    const text = resp.output_text || '{}';
+    const json = JSON.parse(text) as AssessJSON;
 
-    return new Response(JSON.stringify({ output_text: text }), {
+    return new Response(JSON.stringify(json), {
       status: 200,
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json' }
     });
-  } catch (e: any) {
-    const msg = e?.message ?? 'unknown error';
-    return new Response(JSON.stringify({ error: msg }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' },
-    });
+  } catch (err: any) {
+    return new Response(
+      JSON.stringify({ error: err?.message || 'unknown error' }),
+      { status: 500, headers: { 'Content-Type': 'application/json' } }
+    );
   }
 }
