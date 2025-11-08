@@ -8,32 +8,32 @@ type AssessResult = {
   [k: string]: any;
 };
 
-// ========= 2-2 圧縮ヘルパー（そのままコピペ） =========
+// ===== 2-2 圧縮ヘルパー（完全版） =====
 async function compressImage(file: File) {
   const options = { maxSizeMB: 1, maxWidthOrHeight: 1600, useWebWorker: true };
 
   try {
-    // browser-image-compression は File を返す
+    // 圧縮実行
     const compressed = await imageCompression(file, options);
 
-    // ← バッククォートで囲むのが重要（ここがエラー原因でした）
+    // ★ここがエラー元でした：テンプレート文字列の ${} とカッコの数を厳密に修正
     console.log(
-      `圧縮前: ${(file.size / 1024 / 1024).toFixed(2)}MB → 圧縮後: ${(compressed.size / 1024 / 1024).toFixed(2)}MB`
+      `圧縮前: ${(file.size / 1024 / 1024).toFixed(2)}MB  >  圧縮後: ${(compressed.size / 1024 / 1024).toFixed(2)}MB`
     );
 
-    // HEIC/HEIF などは拡張子だけ jpg にそろえる（中身は compressed のまま）
-    const base = (file.name || 'image').replace(/\.(heic|HEIC|heif|HEIF)$/,'');
-    const name = `${base}.jpg`;
+    // File に揃えて返す（Blob -> File）
+    const nameBase = (file.name || 'image').replace(/\.(heic|HEIC|heif|HEIF)$/,'');
+    const name = `${nameBase}.jpg`;
 
-    // compressed は Blob/File なのでそのまま File として包み直す
-    return new File([compressed], name, {
+    const fileLike = new File([compressed], name, {
       type: compressed.type || 'image/jpeg',
       lastModified: Date.now(),
     });
 
+    return fileLike;
   } catch (e) {
     console.warn('圧縮失敗。元画像を使用します:', e);
-    return file;
+    return file; // フォールバック
   }
 }
 // =====================================================
