@@ -11,10 +11,14 @@ async function compressImage(file: File): Promise<File> {
     useWebWorker: true,
   };
   try {
-    const compressed = await imageCompression(file, options);
-    console.log(
-      `圧縮: ${(file.size / 1024 / 1024).toFixed(2)}MB → ${(compressed.size / 1024 / 1024).toFixed(2)}MB`    );
-    return compressed;
+   const compressed = await imageCompression(file, options);
+
+// ここはバッククォート（`）で囲む！ シングル/ダブルクォートではダメ
+console.log(
+  `圧縮: ${(file.size / 1024 / 1024).toFixed(2)}MB → ${(compressed.size / 1024 / 1024).toFixed(2)}MB`
+);
+
+return compressed;
   } catch (e) {
     console.error('画像圧縮に失敗。元画像を使用します。', e);
     return file; // 失敗時は元画像で継続
