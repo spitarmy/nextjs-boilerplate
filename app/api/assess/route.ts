@@ -235,6 +235,10 @@ const mercariDescription = descParts.join('\n').slice(0, 500);
       reasons: parsed.reasons ?? '',
       must_shoot_more: parsed.must_shoot_more ?? [],
       output_text,
+      mercari: {
+  title: mercariTitle,
+  description: mercariDescription,
+},
       raw_model_json: parsed,
     });
   } catch (err: any) {
