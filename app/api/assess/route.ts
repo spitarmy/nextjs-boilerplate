@@ -9,11 +9,11 @@ const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
 // 状態グレード係数（中央値に掛ける）
 const GRADE_COEF: Record<string, number> = {
-  A: 0.90,
-  B: 0.70,
-  C: 0.60,
-  D: 0.50,
-  E: 0.30,
+  A: 0.9,
+  B: 0.7,
+  C: 0.6,
+  D: 0.5,
+  E: 0.3,
 };
 
 type ModelJson = {
@@ -38,18 +38,18 @@ function toInt(n: unknown, fallback = 0) {
 }
 
 function bandFromMid(mid: number, confidence: number) {
-  const w = confidence < 60 ? 0.2 : 0.1; // 確信度で幅調整
+  const w = confidence < 60 ? 0.2 : 0.1;
   const min = Math.max(0, Math.floor(mid * (1 - w)));
   const max = Math.max(min, Math.ceil(mid * (1 + w)));
   return { min, max };
 }
 
-// Edge でも動く ArrayBuffer -> base64
+// Edgeでも動く ArrayBuffer -> base64
 function abToBase64(buf: ArrayBuffer) {
   let s = '';
   const bytes = new Uint8Array(buf);
   for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
-  // @ts-ignore - btoa は Edge Runtime で利用可
+  // @ts-ignore
   return btoa(s);
 }
 
@@ -62,36 +62,35 @@ async function fileToDataUrl(file: File): Promise<string> {
 
 export async function POST(req: NextRequest) {
   try {
-    // 1) 画像入力の取り出し（multipart または JSON）
+    // 1) 画像入力（multipart: 複数 / JSON: image_url 単体）
     const contentType = req.headers.get('content-type') || '';
-    let imageUrl: string | undefined;
+    let imageUrls: string[] = [];
 
     if (contentType.includes('multipart/form-data')) {
       const form = await req.formData();
-      const file =
-        (form.get('file') as File | null) ||
-        (form.get('image') as File | null) ||
-        null;
-      if (!file) {
+      const files = Array.from(form.values()).filter(
+        (v) => v instanceof File
+      ) as File[];
+      if (!files.length) {
         return NextResponse.json(
-          { error: '画像ファイルが見つかりません（file または image キー）。' },
+          { ok: false, error: '画像ファイルが見つかりません' },
           { status: 400 }
         );
       }
-      imageUrl = await fileToDataUrl(file); // data:URL として渡す
+      for (const f of files) imageUrls.push(await fileToDataUrl(f));
     } else {
       const json = (await req.json().catch(() => ({}))) as { image_url?: string };
-      imageUrl = json.image_url?.trim();
+      const u = (json.image_url || '').trim();
+      if (!u) {
+        return NextResponse.json(
+          { ok: false, error: 'image_url または 画像ファイルが必要です。' },
+          { status: 400 }
+        );
+      }
+      imageUrls = [u];
     }
 
-    if (!imageUrl) {
-      return NextResponse.json(
-        { error: 'image_url または 画像ファイルが必要です。' },
-        { status: 400 }
-      );
-    }
-
-    // 2) OpenAI へ問い合わせ（画像＋テキスト）
+    // 2) OpenAI (画像マルチ)
     const completion = await client.chat.completions.create({
       model: 'gpt-4o-mini',
       temperature: 0.2,
@@ -100,18 +99,17 @@ export async function POST(req: NextRequest) {
           role: 'system',
           content: [
             'あなたは中古リユース査定AI「カンテノ」。',
-            'タスク: 画像1枚から分かる範囲で商品を同定し、日本語で JSON を**厳密に**返す。',
-            '注意: テキスト以外は出力しない（コードブロックも不可）。',
+            '画像(1枚以上)を総合判断し、日本語で JSON を厳密に返す。テキスト以外は出力しない。',
             'フィールド:',
             '- category, brand, title_guess, material, period',
             '- authenticity_risk（真贋上の要注意点の要約）',
             '- missing_parts（欠品が疑われる場合は記載）',
-            '- defect_notes（傷/汚れ/日焼け/サビ等の気づき）',
+            '- defect_notes（傷/汚れ/サビ/色ヤケ等）',
             '- must_shoot_more: string[]（追撮すべき部位: 刻印/ラベル/裏面/シリアル 等）',
             '- base_price_jpy: number（国内中古相場の基準価格。メルカリ/ヤフオク/フリマ/古物市の水準を想定）',
-            '- condition_grade: "A"|"B"|"C"|"D"|"E"（A良〜E悪）',
+            '- condition_grade: "A"|"B"|"C"|"D"|"E"',
             '- confidence: number（0-100）',
-            '- reasons: string（根拠・注意点を簡潔に。箇条書き改行可）',
+            '- reasons: string（根拠を簡潔に。箇条書き可）',
           ].join('\n'),
         },
         {
@@ -120,12 +118,12 @@ export async function POST(req: NextRequest) {
             {
               type: 'text',
               text: [
-                '画像を見て上記フォーマットの JSON だけを出力してください。',
-                '相場の基準は国内（メルカリ/ヤフオク/フリマ/古物市）を想定。',
-                '足りない視点があれば must_shoot_more に追加してください。',
+                'これらの画像を総合して上記フォーマットの JSON だけを出力してください。',
+                '相場は国内フリマ/オークション/古物市を前提。',
+                '足りない視点は must_shoot_more に列挙してください。',
               ].join('\n'),
             },
-            { type: 'image_url', image_url: { url: imageUrl } },
+            ...imageUrls.map((url) => ({ type: 'image_url', image_url: { url } })),
           ],
         },
       ],
@@ -133,7 +131,7 @@ export async function POST(req: NextRequest) {
 
     const raw = completion.choices[0]?.message?.content?.trim() ?? '';
 
-    // 3) JSON パース（壊れていたらフォールバック）
+    // 3) JSON パース
     let parsed: ModelJson;
     try {
       const m = raw.match(/\{[\s\S]*\}$/);
@@ -142,83 +140,74 @@ export async function POST(req: NextRequest) {
       parsed = {};
     }
 
-    // 4) 価格レンジ計算（提案の倍率を反映）
+    // 4) 価格レンジ計算
     const base = toInt(parsed.base_price_jpy, 0);
-    const grade = (parsed.condition_grade || 'C').toUpperCase() as keyof typeof GRADE_COEF;
+    const grade = ((parsed.condition_grade || 'C') as string).toUpperCase() as keyof typeof GRADE_COEF;
     const coef = GRADE_COEF[grade] ?? GRADE_COEF.C;
     const mid = Math.max(0, Math.round(base * coef));
     const { min, max } = bandFromMid(mid, toInt(parsed.confidence, 0));
 
     // 5) ユーザー向け整形テキスト
-const lines: string[] = [
-  `推定カテゴリ: ${parsed.category ?? ''}`,
-  `推定ブランド: ${parsed.brand ?? ''}`,
-  `推定名称/型: ${parsed.title_guess ?? ''}`,
-  `素材/技法: ${parsed.material ?? ''}`,
-  `年代: ${parsed.period ?? ''}`,
-  parsed.defect_notes ? `状態メモ: ${parsed.defect_notes}` : undefined,
-  parsed.missing_parts ? `欠品の懸念: ${parsed.missing_parts}` : undefined,
-  parsed.authenticity_risk ? `真贋リスク: ${parsed.authenticity_risk}` : undefined,
-  `状態グレード: ${grade}（係数 ${coef}）`,
-  `概算価格帯: ¥${min.toLocaleString()} 〜 ¥${max.toLocaleString()}（中央値 ¥${mid.toLocaleString()}）`,
-  `確信度: ${toInt(parsed.confidence, 0)}%`,
-  parsed.reasons ? `根拠:\n${parsed.reasons}` : undefined,
-  parsed.must_shoot_more && parsed.must_shoot_more.length
-    ? `追撮推奨: ${parsed.must_shoot_more.join(' / ')}`
-    : undefined,
-].filter((v): v is string => Boolean(v));
+    const lines: string[] = [
+      `査定する`,
+      '',
+      `推定カテゴリ: ${parsed.category ?? ''}`,
+      `推定ブランド: ${parsed.brand ?? ''}`,
+      `推定名称/型: ${parsed.title_guess ?? ''}`,
+      `素材/技法: ${parsed.material ?? ''}`,
+      `年代: ${parsed.period ?? ''}`,
+      parsed.defect_notes ? 状態メモ: ${parsed.defect_notes} : undefined,
+      parsed.missing_parts ? 欠品の懸念: ${parsed.missing_parts} : undefined,
+      parsed.authenticity_risk ? 真贋リスク: ${parsed.authenticity_risk} : undefined,
+      `状態グレード: ${grade}（係数 ${coef}）`,
+      `概算価格帯: ¥${min.toLocaleString()} 〜 ¥${max.toLocaleString()}（中央値 ¥${mid.toLocaleString()}）`,
+      `確信度: ${toInt(parsed.confidence, 0)}%`,
+      parsed.reasons ? 根拠:\n${parsed.reasons} : undefined,
+      parsed.must_shoot_more && parsed.must_shoot_more.length
+        ? 追撮推奨: ${parsed.must_shoot_more.join(' / ')}
+        : undefined,
+    ].filter((v): v is string => Boolean(v));
 
-const output_text = lines.join('\n');
-    // 5.1 メルカリ出品用テキスト生成（40/500 制限）
-// ぜんぶ + 連結で書く＝テンプレ展開を使わない安全版
-function cleanupSpaces(s: string) {
-  return s.replace(/\s+/g, ' ').trim();
-}
+    const output_text = lines.join('\n');
 
-// タイトル 40 文字
-const mtPieces: string[] = [];
-if (parsed.brand) mtPieces.push(String(parsed.brand));
-if (parsed.title_guess) mtPieces.push(String(parsed.title_guess));
-if (parsed.material) mtPieces.push(String(parsed.material));
-if (parsed.period) mtPieces.push(String(parsed.period));
+    // 5.1) メルカリ用テキスト生成（40/500 制限）
+    function cleanupSpaces(s: string) {
+      return s.replace(/\s+/g, ' ').trim();
+    }
 
-const mercariTitle = cleanupSpaces(mtPieces.join(' ')).slice(0, 40);
+    const mercariTitleRaw = [
+      parsed.brand ?? '',
+      parsed.title_guess ?? '',
+      parsed.material ?? '',
+      parsed.period ?? '',
+    ]
+      .filter(Boolean)
+      .join(' ');
 
-// 説明 500 文字
-const descParts: string[] = [];
-descParts.push('【商品説明】');
-descParts.push('カテゴリ: ' + (parsed.category ?? '不明'));
-descParts.push('ブランド: ' + (parsed.brand ?? '不明'));
-if (parsed.title_guess) descParts.push('名称/型番: ' + parsed.title_guess);
-descParts.push('素材・技法: ' + (parsed.material ?? ''));
-descParts.push('年代: ' + (parsed.period ?? ''));
+    const mercariTitle = cleanupSpaces(mercariTitleRaw).slice(0, 40);
 
-// 状態グレードと価格帯
-const gradeStr = String((parsed.condition_grade || 'C')).toUpperCase();
-const defectNote = parsed.defect_notes || '大きなダメージなし';
-descParts.push('状態グレード: ' + gradeStr + '（' + defectNote + '）');
-descParts.push(
-  '概算価格帯: ¥' +
-    min.toLocaleString() +
-    '〜¥' +
-    max.toLocaleString() +
-    '（中央値 ¥' +
-    mid.toLocaleString() +
-    '）'
-);
+    const descParts = [
+      '【商品説明】',
+      `カテゴリ: ${parsed.category ?? '不明'}`,
+      `ブランド: ${parsed.brand ?? '不明'}`,
+      `型番・名称: ${parsed.title_guess ?? ''}`,
+      `素材・技法: ${parsed.material ?? ''}`,
+      `年代: ${parsed.period ?? ''}`,
+      `状態: ${(parsed.condition_grade || 'C').toString().toUpperCase()} (${parsed.defect_notes || '大きなダメージなし'})`,
+      `参考価格帯: ¥${min.toLocaleString()}〜¥${max.toLocaleString()}（目安）`,
+      parsed.reasons ? 【根拠】${parsed.reasons} : '',
+      parsed.missing_parts ? 【欠品】${parsed.missing_parts} : '',
+      parsed.authenticity_risk ? 【真贋メモ】${parsed.authenticity_risk} : '',
+      parsed.must_shoot_more && parsed.must_shoot_more.length
+        ? 【追加推奨カット】${parsed.must_shoot_more.join(' / ')}
+        : '',
+      '※本テキストはAIによる自動生成の参考情報です。',
+    ]
+      .filter(Boolean)
+      .join('\n');
 
-// 任意フィールド
-if (parsed.reasons) descParts.push('根拠: ' + parsed.reasons);
-if (parsed.missing_parts) descParts.push('欠品の懸念: ' + parsed.missing_parts);
-if (parsed.authenticity_risk) descParts.push('真贋メモ: ' + parsed.authenticity_risk);
+    const mercariDescription = descParts.slice(0, 500);
 
-if (parsed.must_shoot_more && parsed.must_shoot_more.length) {
-  descParts.push('【追加撮影カット】' + parsed.must_shoot_more.join(' / '));
-}
-
-descParts.push('※本文テキストはAIによる自動生成の参考情報です。');
-
-const mercariDescription = descParts.join('\n').slice(0, 500);
     // 6) レスポンス
     return NextResponse.json({
       ok: true,
@@ -235,10 +224,8 @@ const mercariDescription = descParts.join('\n').slice(0, 500);
       reasons: parsed.reasons ?? '',
       must_shoot_more: parsed.must_shoot_more ?? [],
       output_text,
-      mercari: {
-  title: mercariTitle,
-  description: mercariDescription,
-},
+      mercari_title: mercariTitle,
+      mercari_description: mercariDescription,
       raw_model_json: parsed,
     });
   } catch (err: any) {
