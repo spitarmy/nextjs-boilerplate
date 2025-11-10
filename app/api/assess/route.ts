@@ -169,40 +169,56 @@ const lines: string[] = [
 ].filter((v): v is string => Boolean(v));
 
 const output_text = lines.join('\n');
-    // 5.1) メルカリ出品用テキスト生成（40/500制限）
+    // 5.1 メルカリ出品用テキスト生成（40/500 制限）
+// ぜんぶ + 連結で書く＝テンプレ展開を使わない安全版
 function cleanupSpaces(s: string) {
   return s.replace(/\s+/g, ' ').trim();
 }
 
-const mercariTitleRaw = [
-  parsed.brand ?? '',
-  parsed.title_guess ?? '',
-  parsed.material ?? '',
-  parsed.period ?? '',
-].filter(Boolean).join(' ');
+// タイトル 40 文字
+const mtPieces: string[] = [];
+if (parsed.brand) mtPieces.push(String(parsed.brand));
+if (parsed.title_guess) mtPieces.push(String(parsed.title_guess));
+if (parsed.material) mtPieces.push(String(parsed.material));
+if (parsed.period) mtPieces.push(String(parsed.period));
 
-const mercariTitle = cleanupSpaces(mercariTitleRaw).slice(0, 40);
+const mercariTitle = cleanupSpaces(mtPieces.join(' ')).slice(0, 40);
 
-const descParts = [
-  '【商品説明】',
-  `カテゴリ: ${parsed.category ?? '不明'}`,
-  `ブランド: ${parsed.brand ?? '不明'}`,
-  parsed.title_guess ? 名称/型: ${parsed.title_guess} : '',
-  `素材・技法: ${parsed.material ?? ''}`,
-  `年代: ${parsed.period ?? ''}`,
-  `状態: ${((parsed.condition_grade || 'C') as string).toUpperCase()}（${parsed.defect_notes || '大きなダメージなし'}）`,
-  `参考査定: ¥${min.toLocaleString()}〜¥${max.toLocaleString()}（目安）`,
-  parsed.reasons ? 【根拠】${parsed.reasons} : '',
-  parsed.missing_parts ? 【欠品】${parsed.missing_parts} : '',
-  parsed.authenticity_risk ? 【真贋メモ】${parsed.authenticity_risk} : '',
-  parsed.must_shoot_more && parsed.must_shoot_more.length
-    ? 【追加推奨カット】${parsed.must_shoot_more.join(' / ')}
-    : '',
-  '※本テキストはAIによる自動生成の参考情報です。'
-].filter(Boolean).join('\n');
+// 説明 500 文字
+const descParts: string[] = [];
+descParts.push('【商品説明】');
+descParts.push('カテゴリ: ' + (parsed.category ?? '不明'));
+descParts.push('ブランド: ' + (parsed.brand ?? '不明'));
+if (parsed.title_guess) descParts.push('名称/型番: ' + parsed.title_guess);
+descParts.push('素材・技法: ' + (parsed.material ?? ''));
+descParts.push('年代: ' + (parsed.period ?? ''));
 
-const mercariDescription = descParts.slice(0, 500);
+// 状態グレードと価格帯
+const gradeStr = String((parsed.condition_grade || 'C')).toUpperCase();
+const defectNote = parsed.defect_notes || '大きなダメージなし';
+descParts.push('状態グレード: ' + gradeStr + '（' + defectNote + '）');
+descParts.push(
+  '概算価格帯: ¥' +
+    min.toLocaleString() +
+    '〜¥' +
+    max.toLocaleString() +
+    '（中央値 ¥' +
+    mid.toLocaleString() +
+    '）'
+);
 
+// 任意フィールド
+if (parsed.reasons) descParts.push('根拠: ' + parsed.reasons);
+if (parsed.missing_parts) descParts.push('欠品の懸念: ' + parsed.missing_parts);
+if (parsed.authenticity_risk) descParts.push('真贋メモ: ' + parsed.authenticity_risk);
+
+if (parsed.must_shoot_more && parsed.must_shoot_more.length) {
+  descParts.push('【追加撮影カット】' + parsed.must_shoot_more.join(' / '));
+}
+
+descParts.push('※本文テキストはAIによる自動生成の参考情報です。');
+
+const mercariDescription = descParts.join('\n').slice(0, 500);
     // 6) レスポンス
     return NextResponse.json({
       ok: true,
