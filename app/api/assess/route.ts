@@ -150,25 +150,25 @@ export async function POST(req: NextRequest) {
     const { min, max } = bandFromMid(mid, toInt(parsed.confidence, 0));
 
     // 5) ユーザー向け整形テキスト
-    const lines: string[] = [
-      `推定カテゴリ: ${parsed.category ?? ''}`,
-      `推定ブランド: ${parsed.brand ?? ''}`,
-      `推定名称/型: ${parsed.title_guess ?? ''}`,
-      `素材/技法: ${parsed.material ?? ''}`,
-`年代: ${parsed.period ?? ''}`,
-parsed.defect_notes ? `状態メモ: ${parsed.defect_notes}` : undefined,
-parsed.missing_parts ? `欠品の懸念: ${parsed.missing_parts}` : undefined,
-parsed.authenticity_risk ? `真贋リスク: ${parsed.authenticity_risk}` : undefined,
-`状態グレード: ${grade}（係数 ${coef}）`,
-      `概算価格帯: ¥${min.toLocaleString()} 〜 ¥${max.toLocaleString()}（中央値 ¥${mid.toLocaleString()}）`,
-      `確信度: ${toInt(parsed.confidence, 0)}%`,
-      parsed.reasons ? 根拠:\n${parsed.reasons} : undefined,
-      parsed.must_shoot_more && parsed.must_shoot_more.length
-        ? 追撮推奨: ${parsed.must_shoot_more.join(' / ')}
-        : undefined,
-    ].filter(Boolean) as string[];
+const lines: string[] = [
+  `推定カテゴリ: ${parsed.category ?? ''}`,
+  `推定ブランド: ${parsed.brand ?? ''}`,
+  `推定名称/型: ${parsed.title_guess ?? ''}`,
+  `素材/技法: ${parsed.material ?? ''}`,
+  `年代: ${parsed.period ?? ''}`,
+  parsed.defect_notes ? `状態メモ: ${parsed.defect_notes}` : undefined,
+  parsed.missing_parts ? `欠品の懸念: ${parsed.missing_parts}` : undefined,
+  parsed.authenticity_risk ? `真贋リスク: ${parsed.authenticity_risk}` : undefined,
+  `状態グレード: ${grade}（係数 ${coef}）`,
+  `概算価格帯: ¥${min.toLocaleString()} 〜 ¥${max.toLocaleString()}（中央値 ¥${mid.toLocaleString()}）`,
+  `確信度: ${toInt(parsed.confidence, 0)}%`,
+  parsed.reasons ? `根拠:\n${parsed.reasons}` : undefined,
+  parsed.must_shoot_more && parsed.must_shoot_more.length
+    ? `追撮推奨: ${parsed.must_shoot_more.join(' / ')}`
+    : undefined,
+].filter((v): v is string => Boolean(v));
 
-    const output_text = lines.join('\n');
+const output_text = lines.join('\n');
 
     // 6) レスポンス
     return NextResponse.json({
