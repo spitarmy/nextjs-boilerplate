@@ -1,4 +1,4 @@
-// app/api/assess/route.ts
+// /app/api/assess/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
 
@@ -7,13 +7,8 @@ export const dynamic = 'force-dynamic';
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
-type ReqBody = {
-  image_url: string;
-  mode?: 'questions' | 'assess';     // デフォルトは questions
-  answers?: Record<string, string>;  // ユーザーが返した追加情報（任意）
-};
-
-const CONDITION_MULTIPLIER: Record<string, number> = {
+// ユーザー指定の状態グレード係数（中央値を作る）
+const GRADE_COEF: Record<string, number> = {
   A: 0.90,
   B: 0.70,
   C: 0.60,
@@ -21,143 +16,179 @@ const CONDITION_MULTIPLIER: Record<string, number> = {
   E: 0.30,
 };
 
+type ModelJson = {
+  category?: string;
+  brand?: string;
+  title_guess?: string;
+  material?: string;
+  period?: string;
+  authenticity_risk?: string; // 真贋リスクの要点
+  missing_parts?: string;
+  defect_notes?: string;
+  must_shoot_more?: string[]; // 追撮指示
+  // モデルに出させる基準価格（市場相場の素の基準）
+  base_price_jpy?: number; // 例: 12000 （税・手数料控除前）
+  condition_grade?: 'A' | 'B' | 'C' | 'D' | 'E';
+  confidence?: number; // 0-100
+  reasons?: string; // 箇条書き可（改行含む）
+};
+
+function toInt(n: unknown, fallback = 0) {
+  const v = Number(n);
+  return Number.isFinite(v) ? Math.round(v) : fallback;
+}
+
+function bandFromMid(mid: number, confidence: number) {
+  // 確信度でレンジの広さを調整（60%未満は±20%、それ以外は±10%）
+  const w = confidence < 60 ? 0.2 : 0.1;
+  const min = Math.max(0, Math.floor(mid * (1 - w)));
+  const max = Math.max(min, Math.ceil(mid * (1 + w)));
+  return { min, max };
+}
+
+async function fileToDataUrl(file: File): Promise<string> {
+  const buf = await file.arrayBuffer();
+  const b64 = Buffer.from(buf).toString('base64');
+  const mime = file.type || 'image/jpeg';
+  return `data:${mime};base64,${b64}`;
+}
+
 export async function POST(req: NextRequest) {
   try {
-    const body = (await req.json()) as ReqBody;
-    const imageUrl = body.image_url?.trim();
-    const mode = body.mode ?? 'questions';
+    // 1) 画像入力の取り出し（multipart or JSON）
+    const contentType = req.headers.get('content-type') || '';
+    let imageUrl: string | undefined;
+
+    if (contentType.includes('multipart/form-data')) {
+      const form = await req.formData();
+      const file =
+        (form.get('file') as File | null) ||
+        (form.get('image') as File | null) ||
+        null;
+      if (!file) {
+        return NextResponse.json(
+          { error: '画像ファイルが見つかりません（file または image キー）。' },
+          { status: 400 }
+        );
+      }
+      imageUrl = await fileToDataUrl(file); // data: URL として OpenAI に渡す
+    } else {
+      // JSON: { image_url: string }
+      const json = (await req.json().catch(() => ({}))) as {
+        image_url?: string;
+      };
+      imageUrl = json.image_url?.trim();
+    }
 
     if (!imageUrl) {
-      return NextResponse.json({ error: 'image_url is required' }, { status: 400 });
+      return NextResponse.json(
+        { error: 'image_url または 画像ファイルが必要です。' },
+        { status: 400 }
+      );
     }
 
-    if (mode === 'questions') {
-      // 1) 不足カットや刻印・シリアル等の追撮指示を返す
-      const completion = await client.chat.completions.create({
-        model: 'gpt-4o-mini',
-        temperature: 0.2,
-        response_format: { type: 'json_object' },
-        messages: [
-          {
-            role: 'system',
-            content:
-              [
-                'あなたは中古リユース査定AI「カンテノ」です。',
-                'まずは不足カット・判定根拠の収集を最短で行うための「追撮チェックリスト」を作成します。',
-                '和洋骨董・ブランド・美術・家電を想定。中古実勢（メルカリ/ラクマ/Y!フリマ/ヤフオク）優先で後段の査定を行う前提。'
-              ].join(' ')
-          },
-          {
-            role: 'user',
-            content: [
-              { type: 'text', text: 'この画像から査定に必須の追加カット/情報を、最大7項目まで日本語で出してください。' },
-              { type: 'image_url', image_url: { url: imageUrl } }
-            ]
-          }
-        ]
-      });
-
-      const raw = completion.choices[0]?.message?.content || '{}';
-      // 期待JSON: { questions: string[], notes: string }
-      const json = safeParseJSON(raw, { questions: [], notes: '' });
-
-      // 既存互換のテキスト
-      const output_text =
-        ['【追加で欲しい写真/情報】', ...json.questions.map((q: string, i: number) => `${i + 1}. ${q}`)]
-          .concat(json.notes ? [`\n補足: ${json.notes}`] : [])
-          .join('\n');
-
-      return NextResponse.json({ mode: 'questions', output_text, json });
-    }
-
-    // mode === 'assess'
-    const answers = body.answers ?? {};
+    // 2) OpenAI への問い合わせ（画像＋テキスト）
     const completion = await client.chat.completions.create({
       model: 'gpt-4o-mini',
       temperature: 0.2,
-      response_format: { type: 'json_object' },
       messages: [
         {
           role: 'system',
-          content: [
-            'あなたは中古リユース査定AI「カンテノ」。',
-            '真贋→相場→状態→希少性→付属の優先順位でロジックを組み、相場は「中古実勢（メルカリ/ラクマ/Y!フリマ/ヤフオク）」を基準に推定します。',
-            '出力は JSON。brand/material/model/period/conditionGrade(A-E)/accessories/authenticityNotes/confidence(0-100)/',
-            'baseMarketJPY(相場中心値)/coefficients{category,condition,accessory,demand,urgency}/',
-            'priceRange{min,max,mid}/reasons を含めてください。'
-          ].join(' ')
+          content:
+            [
+              'あなたは中古リユース査定AI「カンテノ」。',
+              'タスク: 画像1枚から分かる範囲で商品を同定し、日本語で JSON を**厳密に**返す。',
+              '注意: テキスト以外は出力しない（コードブロックも不可）。',
+              'フィールド:',
+              '- category, brand, title_guess, material, period',
+              '- authenticity_risk（真贋上の要注意点の要約）',
+              '- missing_parts（欠品が疑われる場合は記載）',
+              '- defect_notes（傷/汚れ/日焼け/サビ等の気づき）',
+              '- must_shoot_more: string[]（追撮すべき部位: 刻印/ラベル/裏面/シリアル 等）',
+              '- base_price_jpy: number（国内中古相場のおおよその基準価格。メルカリ/ヤフオク/フリマ/古物市の相場水準を前提）',
+              '- condition_grade: "A"|"B"|"C"|"D"|"E"（A良〜E悪）',
+              '- confidence: number（0-100）',
+              '- reasons: string（根拠・注意点を簡潔に。箇条書き改行可）',
+            ].join('\n'),
         },
         {
           role: 'user',
           content: [
-            { type: 'text', text:
-              [
-                '次の制約で価格を計算してください。',
-                '- conditionはA=0.90,B=0.70,C=0.60,D=0.50,E=0.30の倍率。',
-                '- accessoriesは「フル揃い=1.10、欠品なし=1.00、一部欠品=0.95、欠品多い=0.90」を目安に選定。',
-                '- demand(需要)は0.90〜1.10、urgency(早く売りたい度)は0.90〜1.10で合理的に設定。',
-                '- category係数は1.00固定（必要あれば1.00±0.05の範囲で微調整可）。',
-                '- 最終価格 mid = round(baseMarket * category * condition * accessory * demand * urgency)。',
-                '- min/max は mid の ±10%（四捨五入）。',
-                'answers(JSON)も参考にして良い: ' + JSON.stringify(answers)
-              ].join('\n')
+            {
+              type: 'text',
+              text:
+                [
+                  '画像を見て上記フォーマットの JSON だけを出力してください。',
+                  '相場の基準は国内（メルカリ/ヤフオク/フリマ/古物市）を想定。',
+                  '足りない視点があれば must_shoot_more に追加してください。',
+                ].join('\n'),
             },
-            { type: 'image_url', image_url: { url: imageUrl } }
-          ]
-        }
-      ]
+            { type: 'image_url', image_url: { url: imageUrl } },
+          ],
+        },
+      ],
     });
 
-    const json = safeParseJSON(completion.choices[0]?.message?.content || '{}', {});
-    // フェイルセーフ：最低限のフィールドを補完
-    const conditionKey = (json.conditionGrade || 'C').toUpperCase();
-    const conditionCoef = CONDITION_MULTIPLIER[conditionKey] ?? CONDITION_MULTIPLIER['C'];
-
-    let mid = Number(json?.priceRange?.mid);
-    if (!Number.isFinite(mid)) {
-      const base = Math.round(Number(json.baseMarketJPY) || 0);
-      const coef = Number(json?.coefficients?.category ?? 1)
-        * Number(json?.coefficients?.accessory ?? 1)
-        * Number(json?.coefficients?.demand ?? 1)
-        * Number(json?.coefficients?.urgency ?? 1)
-        * conditionCoef;
-      mid = Math.round(base * (Number.isFinite(coef) ? coef : conditionCoef));
+    const raw = completion.choices[0]?.message?.content?.trim() ?? '';
+    // 3) JSON パース（壊れていたら最低限でフォールバック）
+    let parsed: ModelJson;
+    try {
+      // 先頭・末尾に余計な説明が入った場合を考慮して波括弧抽出も試みる
+      const m = raw.match(/\{[\s\S]*\}$/);
+      parsed = JSON.parse(m ? m[0] : raw) as ModelJson;
+    } catch {
+      parsed = {};
     }
-    const min = Math.round(mid * 0.9);
-    const max = Math.round(mid * 1.1);
 
-    const output_text = [
-      `【推定結果】 ${json.brand ?? ''} / ${json.model ?? ''}`,
-      `材質・年代: ${json.material ?? ''} / ${json.period ?? ''}`,
-      `状態: ${conditionKey}（係数${conditionCoef.toFixed(2)}） 付属: ${json.accessories ?? '-'}`,
-      `真贋メモ: ${json.authenticityNotes ?? '-'}`,
-      `概算価格帯: ￥${min.toLocaleString()} 〜 ￥${max.toLocaleString()}（中心 ￥${mid.toLocaleString()}）`,
-      `確信度: ${Number(json.confidence ?? 0)}%`,
-      json.reasons ? 根拠: ${json.reasons} : ''
-    ].filter(Boolean).join('\n');
+    // 4) 価格レンジ計算（指定の倍率を反映）
+    const base = toInt(parsed.base_price_jpy, 0);
+    const grade = (parsed.condition_grade || 'C').toUpperCase() as keyof typeof GRADE_COEF;
+    const coef = GRADE_COEF[grade] ?? GRADE_COEF.C;
+    const mid = Math.max(0, Math.round(base * coef));
+    const { min, max } = bandFromMid(mid, toInt(parsed.confidence, 0));
 
-    const merged = {
-      ...json,
-      conditionGrade: conditionKey,
-      coefficients: {
-        category: Number(json?.coefficients?.category ?? 1),
-        condition: conditionCoef,
-        accessory: Number(json?.coefficients?.accessory ?? 1),
-        demand: Number(json?.coefficients?.demand ?? 1),
-        urgency: Number(json?.coefficients?.urgency ?? 1),
+    // 5) ユーザー向け整形テキスト
+    const lines: string[] = [
+      `推定カテゴリ: ${parsed.category ?? ''}`,
+      `推定ブランド: ${parsed.brand ?? ''}`,
+      `推定名称/型: ${parsed.title_guess ?? ''}`,
+      `素材/技法: ${parsed.material ?? ''}`,
+      `年代: ${parsed.period ?? ''}`,
+      parsed.defect_notes ? 状態メモ: ${parsed.defect_notes} : undefined,
+      parsed.missing_parts ? 欠品の懸念: ${parsed.missing_parts} : undefined,
+      parsed.authenticity_risk ? 真贋リスク: ${parsed.authenticity_risk} : undefined,
+      `状態グレード: ${grade}（係数 ${coef}）`,
+      `概算価格帯: ¥${min.toLocaleString()} 〜 ¥${max.toLocaleString()}（中央値 ¥${mid.toLocaleString()}）`,
+      `確信度: ${toInt(parsed.confidence, 0)}%`,
+      parsed.reasons ? 根拠:\n${parsed.reasons} : undefined,
+      parsed.must_shoot_more && parsed.must_shoot_more.length
+        ? 追撮推奨: ${parsed.must_shoot_more.join(' / ')}
+        : undefined,
+    ].filter(Boolean) as string[];
+
+    const output_text = lines.join('\n');
+
+    // 6) API レスポンス（既存互換 + 構造化）
+    return NextResponse.json({
+      ok: true,
+      price: { min, mid, max },
+      condition_grade: grade,
+      confidence: toInt(parsed.confidence, 0),
+      meta: {
+        category: parsed.category ?? '',
+        brand: parsed.brand ?? '',
+        title_guess: parsed.title_guess ?? '',
+        material: parsed.material ?? '',
+        period: parsed.period ?? '',
       },
-      priceRange: { min, max, mid }
-    };
-
-    return NextResponse.json({ mode: 'assess', output_text, json: merged });
+      reasons: parsed.reasons ?? '',
+      must_shoot_more: parsed.must_shoot_more ?? [],
+      output_text,
+      raw_model_json: parsed, // デバッグ/将来用
+    });
   } catch (err: any) {
-    // フォールバック（テキスト）
-    const msg = typeof err?.message === 'string' ? err.message : 'Unknown server error';
-    return NextResponse.json({ error: msg }, { status: 500 });
+    const msg =
+      typeof err?.message === 'string' ? err.message : 'Unknown server error';
+    return NextResponse.json({ ok: false, error: msg }, { status: 500 });
   }
-}
-
-/** JSON安全Parse */
-function safeParseJSON<T>(text: string, fallback: T): T {
-  try { return JSON.parse(text) as T; } catch { return fallback; }
 }
