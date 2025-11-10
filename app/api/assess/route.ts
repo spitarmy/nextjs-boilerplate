@@ -162,33 +162,33 @@ export async function POST(req: NextRequest) {
     }
     const output_text = lines.join('\n');
 
-    // 5.1) メルカリ用テキスト（40/500 制限、こちらも安全に構築）
-    const titleParts: string[] = [];
-    if (parsed.brand) titleParts.push(parsed.brand);
-    if (parsed.title_guess) titleParts.push(parsed.title_guess);
-    if (parsed.material) titleParts.push(parsed.material);
-    if (parsed.period) titleParts.push(parsed.period);
-    const mercariTitle = titleParts.join(' ').replace(/\s+/g, ' ').trim().slice(0, 40);
+    // 5.1) メルカリ用テキスト（40/500）
+const titleParts: string[] = [];
+if (parsed.brand) titleParts.push(parsed.brand);
+if (parsed.title_guess) titleParts.push(parsed.title_guess);
+if (parsed.material) titleParts.push(parsed.material);
+if (parsed.period) titleParts.push(parsed.period);
+const mercariTitle = titleParts.join(' ').replace(/\s+/g, ' ').trim().slice(0, 40);
 
-    const descParts: string[] = [];
-    descParts.push('【商品説明】');
-    descParts.push(`カテゴリ: ${parsed.category ?? '不明'}`);
-    descParts.push(`ブランド: ${parsed.brand ?? '不明'}`);
-    descParts.push(`型番・名称: ${parsed.title_guess ?? ''}`);
-    descParts.push(`素材・技法: ${parsed.material ?? ''}`);
-    descParts.push(`年代: ${parsed.period ?? ''}`);
-    descParts.push(
-      状態: ${((parsed.condition_grade || 'C') as string).toUpperCase()}（${parsed.defect_notes || '大きなダメージなし'}）
-    );
-    descParts.push(`参考価格帯: ¥${min.toLocaleString()}〜¥${max.toLocaleString()}（目安）`);
-    if (parsed.reasons) descParts.push(`【根拠】${parsed.reasons}`);
-    if (parsed.missing_parts) descParts.push(`【欠品】${parsed.missing_parts}`);
-    if (parsed.authenticity_risk) descParts.push(`【真贋メモ】${parsed.authenticity_risk}`);
-    if (parsed.must_shoot_more && parsed.must_shoot_more.length) {
-      descParts.push(`【追加推奨カット】${parsed.must_shoot_more.join(' / ')}`);
-    }
-    descParts.push('※本テキストはAIによる自動生成の参考情報です。');
-    const mercariDescription = descParts.join('\n').slice(0, 500);
+const descParts: string[] = [];
+descParts.push('【商品説明】');
+descParts.push(`カテゴリ: ${parsed.category ?? '不明'}`);
+descParts.push(`ブランド: ${parsed.brand ?? '不明'}`);
+descParts.push(`型番・名称: ${parsed.title_guess ?? ''}`);
+descParts.push(`素材・技法: ${parsed.material ?? ''}`);
+descParts.push(`年代: ${parsed.period ?? ''}`);
+// ← 問題の行はこれ。型アサーションを使わず、上で計算済みの grade を使う
+descParts.push(`状態: ${grade}（${parsed.defect_notes || '大きなダメージなし'}）`);
+descParts.push(`参考価格帯: ¥${min.toLocaleString()}〜¥${max.toLocaleString()}（目安）`);
+if (parsed.reasons)        descParts.push(`【根拠】${parsed.reasons}`);
+if (parsed.missing_parts)  descParts.push(`【欠品】${parsed.missing_parts}`);
+if (parsed.authenticity_risk) descParts.push(`【真贋メモ】${parsed.authenticity_risk}`);
+if (parsed.must_shoot_more && parsed.must_shoot_more.length) {
+  descParts.push(`【追加推奨カット】${parsed.must_shoot_more.join(' / ')}`);
+}
+descParts.push('※本テキストはAIによる自動生成の参考情報です。');
+
+const mercariDescription = descParts.join('\n').slice(0, 500);
 
     // 6) レスポンス
     return NextResponse.json({
