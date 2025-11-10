@@ -2,158 +2,185 @@
 
 import React, { useState } from 'react';
 
-type ApiResponse = {
+type AssessResponse = {
   ok: boolean;
-  output_text?: string;
-  mercari?: {
-    title?: string;
-    description?: string;
-  };
   error?: string;
+  output_text?: string;
+  price?: { min: number; mid: number; max: number };
+  condition_grade?: string;
+  confidence?: number;
+  meta?: {
+    category: string;
+    brand: string;
+    title_guess: string;
+    material: string;
+    period: string;
+  };
+  reasons?: string;
+  must_shoot_more?: string[];
+  // 追加: メルカリ用
+  mercari_title?: string;
+  mercari_description?: string;
 };
 
 export default function UploadForm() {
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-
-  const [resultText, setResultText] = useState<string>('');
-  const [mTitle, setMTitle] = useState<string>('');       // 40字
-  const [mDesc, setMDesc] = useState<string>('');         // 500字
-  const [copied, setCopied] = useState<string>('');
+  const [result, setResult] = useState<AssessResponse | null>(null);
+  const [copied, setCopied] = useState<'title' | 'desc' | ''>('');
 
   function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0] || null;
-    setFile(f);
-    setResultText('');
-    setMTitle('');
-    setMDesc('');
+    const fList = Array.from(e.target.files || []);
+    setFiles(fList);
+    setResult(null);
     setCopied('');
-    if (f) setPreviewUrl(URL.createObjectURL(f));
-    else setPreviewUrl(null);
+    if (fList.length > 0) {
+      setPreviewUrl(URL.createObjectURL(fList[0]));
+    } else {
+      setPreviewUrl(null);
+    }
   }
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!file) return;
-
+    if (!files.length) return;
     setLoading(true);
-    setResultText('');
-    setMTitle('');
-    setMDesc('');
+    setResult(null);
     setCopied('');
 
     try {
       const fd = new FormData();
-      fd.append('file', file);
+      files.forEach((f, i) => fd.append(`file_${i + 1}`, f));
 
-      const res = await fetch('/api/assess', { method: 'POST', body: fd });
-      const json = (await res.json()) as ApiResponse;
+      const res = await fetch('/api/assess', {
+        method: 'POST',
+        body: fd,
+      });
 
-      if (!res.ok || !json.ok) {
-        throw new Error(json.error || `HTTP ${res.status}`);
-      }
-
-      setResultText(json.output_text || '');
-
-      // ← ここで API の mercari を受け取って UI に反映
-      const t = (json.mercari?.title || '').slice(0, 40);
-      const d = (json.mercari?.description || '').slice(0, 500);
-      setMTitle(t);
-      setMDesc(d);
-    } catch (err: any) {
-      setResultText(`エラー: ${err?.message || 'unknown'}`);
+      const json = (await res.json()) as AssessResponse;
+      setResult(json);
+    } catch (err) {
+      setResult({ ok: false, error: '通信エラー' });
     } finally {
       setLoading(false);
     }
   }
 
-  async function copy(text: string, label: string) {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(`${label} をコピーしました`);
-      setTimeout(() => setCopied(''), 1500);
-    } catch {
-      setCopied('コピーに失敗しました');
-      setTimeout(() => setCopied(''), 1500);
-    }
+  function copyText(s: string) {
+    navigator.clipboard.writeText(s).then(() => {
+      // UI側でどちらをコピーしたか示すための状態は外から指定
+    });
   }
 
   return (
-    <form onSubmit={onSubmit} style={{ display: 'grid', gap: 12, maxWidth: 720 }}>
+    <form onSubmit={onSubmit} style={{ display: 'grid', gap: 12 }}>
       <div>
-        <label>ファイルを選択</label><br />
-        <input type="file" accept="image/*" onChange={onPickFile} />
+        <input
+          type="file"
+          multiple
+          accept="image/*"
+          onChange={onPickFile}
+        />
+        {files.length > 0 && (
+          <div style={{ fontSize: 12, marginTop: 4 }}>
+            選択: {files.length}枚
+          </div>
+        )}
       </div>
 
       {previewUrl && (
         <img
           src={previewUrl}
           alt="preview"
-          style={{ maxWidth: 360, border: '1px solid #ddd', borderRadius: 8 }}
+          style={{ maxWidth: 320, borderRadius: 6 }}
         />
       )}
 
-      <button type="submit" disabled={!file || loading}>
+      <button type="submit" disabled={loading || files.length === 0}>
         {loading ? '査定中…' : '査定する'}
       </button>
 
-      {/* 査定テキスト */}
-      {!!resultText && (
-        <div>
-          <h3 style={{ margin: '16px 0 6px' }}>査定文</h3>
-          <pre
-            style={{
-              whiteSpace: 'pre-wrap',
-              background: '#f7f7f8',
-              border: '1px solid #eee',
-              padding: 12,
-              borderRadius: 8,
-            }}
-          >
-            {resultText}
-          </pre>
-        </div>
-      )}
+      {result && (
+        <div style={{ whiteSpace: 'pre-wrap', fontSize: 14 }}>
+          {!result.ok && <div style={{ color: 'crimson' }}>Error: {result.error}</div>}
 
-      {/* メルカリ用コピペ */}
-      {(mTitle || mDesc) && (
-        <div style={{ marginTop: 8 }}>
-          <h3 style={{ margin: '16px 0 6px' }}>メルカリ用コピペ</h3>
+          {result.ok && (
+            <>
+              <h3 style={{ margin: '12px 0 6px' }}>査定する</h3>
+              <div>{result.output_text}</div>
 
-          <div style={{ marginBottom: 8 }}>
-            <label>
-              タイトル（40字以内）{' '}
-              <small>{mTitle.length}/40</small>
-            </label>
-            <textarea
-              value={mTitle}
-              readOnly
-              rows={2}
-              style={{ width: '100%', resize: 'vertical' }}
-            />
-            <button type="button" onClick={() => copy(mTitle, 'タイトル')}>
-              タイトルをコピー
-            </button>
-          </div>
+              {/* メルカリ用コピペ */}
+              {(result.mercari_title || result.mercari_description) && (
+                <div style={{ marginTop: 16 }}>
+                  <h3 style={{ margin: '12px 0 6px' }}>メルカリ用（コピペ）</h3>
 
-          <div>
-            <label>
-              商品説明（500字以内）{' '}
-              <small>{mDesc.length}/500</small>
-            </label>
-            <textarea
-              value={mDesc}
-              readOnly
-              rows={8}
-              style={{ width: '100%', resize: 'vertical' }}
-            />
-            <button type="button" onClick={() => copy(mDesc, '商品説明')}>
-              商品説明をコピー
-            </button>
-          </div>
+                  {result.mercari_title && (
+                    <div style={{ marginBottom: 8 }}>
+                      <div style={{ fontWeight: 600 }}>タイトル（40字内）</div>
+                      <div
+                        style={{
+                          background: '#f7f7f7',
+                          padding: 8,
+                          borderRadius: 6,
+                          wordBreak: 'break-all',
+                        }}
+                      >
+                        {result.mercari_title}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          copyText(result.mercari_title!);
+                          setCopied('title');
+                        }}
+                        style={{ marginTop: 6 }}
+                      >
+                        タイトルをコピー
+                      </button>
+                      {copied === 'title' && (
+                        <span style={{ marginLeft: 8, color: 'seagreen' }}>
+                          コピーしました
+                        </span>
+                      )}
+                    </div>
+                  )}
 
-          {copied && <div style={{ color: '#0a7', marginTop: 6 }}>{copied}</div>}
+                  {result.mercari_description && (
+                    <div>
+                      <div style={{ fontWeight: 600 }}>商品説明（500字内）</div>
+                      <div
+                        style={{
+                          background: '#f7f7f7',
+                          padding: 8,
+                          borderRadius: 6,
+                          whiteSpace: 'pre-wrap',
+                          wordBreak: 'break-word',
+                        }}
+                      >
+                        {result.mercari_description}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          copyText(result.mercari_description!);
+                          setCopied('desc');
+                        }}
+                        style={{ marginTop: 6 }}
+                      >
+                        説明文をコピー
+                      </button>
+                      {copied === 'desc' && (
+                        <span style={{ marginLeft: 8, color: 'seagreen' }}>
+                          コピーしました
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
         </div>
       )}
     </form>
