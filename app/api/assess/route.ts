@@ -186,28 +186,25 @@ const output_text = lines.join('\n');
 
     const mercariTitle = cleanupSpaces(mercariTitleRaw).slice(0, 40);
 
-    const descParts = [
-      '【商品説明】',
-      `カテゴリ: ${parsed.category ?? '不明'}`,
-      `ブランド: ${parsed.brand ?? '不明'}`,
-      `型番・名称: ${parsed.title_guess ?? ''}`,
-      `素材・技法: ${parsed.material ?? ''}`,
-      `年代: ${parsed.period ?? ''}`,
-      `状態: ${(parsed.condition_grade || 'C').toString().toUpperCase()} (${parsed.defect_notes || '大きなダメージなし'})`,
-      `参考価格帯: ¥${min.toLocaleString()}〜¥${max.toLocaleString()}（目安）`,
-      parsed.reasons ? 【根拠】${parsed.reasons} : '',
-      parsed.missing_parts ? 【欠品】${parsed.missing_parts} : '',
-      parsed.authenticity_risk ? 【真贋メモ】${parsed.authenticity_risk} : '',
-      parsed.must_shoot_more && parsed.must_shoot_more.length
-        ? 【追加推奨カット】${parsed.must_shoot_more.join(' / ')}
-        : '',
-      '※本テキストはAIによる自動生成の参考情報です。',
-    ]
-      .filter(Boolean)
-      .join('\n');
+   const descParts = [
+  '【商品説明】',
+  `カテゴリ: ${parsed.category ?? '不明'}`,
+  `ブランド: ${parsed.brand ?? '不明'}`,
+  `型番・名称: ${parsed.title_guess ?? ''}`,
+  `素材・技法: ${parsed.material ?? ''}`,
+  `年代: ${parsed.period ?? ''}`,
+  `状態: ${((parsed.condition_grade || 'C') as string).toUpperCase()}（${parsed.defect_notes || '大きなダメージなし'}）`,
+  `参考価格帯: ¥${min.toLocaleString()}〜¥${max.toLocaleString()}（目安）`,
+  parsed.reasons ? `【根拠】${parsed.reasons}` : '',
+  parsed.missing_parts ? `【欠品】${parsed.missing_parts}` : '',
+  parsed.authenticity_risk ? `【真贋メモ】${parsed.authenticity_risk}` : '',
+  parsed.must_shoot_more && parsed.must_shoot_more.length
+    ? `【追加推奨カット】${parsed.must_shoot_more.join(' / ')}`
+    : '',
+  '※本テキストはAIによる自動生成の参考情報です。',
+].filter(Boolean).join('\n');
 
-    const mercariDescription = descParts.slice(0, 500);
-
+const mercariDescription = descParts.slice(0, 500);
     // 6) レスポンス
     return NextResponse.json({
       ok: true,
