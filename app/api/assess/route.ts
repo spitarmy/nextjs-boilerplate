@@ -74,12 +74,13 @@ export async function POST(req: NextRequest) {
 
     // dataURL → Responses API の image_data 形式に
     function dataUrlToPart(dataUrl: string) {
-      const m = dataUrl.match(/^data:([^;]+);base64,(.+)$/s);
-      if (!m) throw new Error('invalid data url');
-      const media = m[1];
-      const b64 = m[2];
-      return { type: 'input_image', image_data: { b64, media_type: media } };
-    }
+  // dotAll(/s) を使わず [\s\S]+ で代替
+  const m = dataUrl.match(/^data:([^;]+);base64,([\s\S]+)$/);
+  if (!m) throw new Error('invalid data url');
+  const media = m[1];
+  const b64   = m[2];
+  return { type: 'input_image', image_data: { b64, media_type: media } };
+}
     const imageParts = dataImages.map(dataUrlToPart);
 
     const userText = [
