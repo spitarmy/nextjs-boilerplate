@@ -3,22 +3,33 @@ import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
 import { Buffer } from 'node:buffer';
 
-export const runtime = 'nodejs';               // node なので Buffer が使える
+export const runtime = 'nodejs';          // Bufferが使える
 export const dynamic = 'force-dynamic';
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
+// 状態グレード係数
 const GRADE_COEF: Record<string, number> = { A: 0.9, B: 0.7, C: 0.6, D: 0.5, E: 0.3 };
 
 type ModelJson = {
-  category?: string; brand?: string; title_guess?: string; material?: string; period?: string;
-  authenticity_risk?: string; missing_parts?: string; defect_notes?: string;
-  must_shoot_more?: string[]; base_price_jpy?: number;
-  condition_grade?: 'A'|'B'|'C'|'D'|'E'; confidence?: number; reasons?: string;
+  category?: string;
+  brand?: string;
+  title_guess?: string;
+  material?: string;
+  period?: string;
+  authenticity_risk?: string;
+  missing_parts?: string;
+  defect_notes?: string;
+  must_shoot_more?: string[];
+  base_price_jpy?: number;
+  condition_grade?: 'A' | 'B' | 'C' | 'D' | 'E';
+  confidence?: number;
+  reasons?: string;
 };
 
 const toInt = (n: unknown, fallback = 0) => {
-  const v = Number(n); return Number.isFinite(v) ? Math.round(v) : fallback;
+  const v = Number(n);
+  return Number.isFinite(v) ? Math.round(v) : fallback;
 };
 
 function bandFromMid(mid: number, confidence: number) {
@@ -30,18 +41,22 @@ function bandFromMid(mid: number, confidence: number) {
 
 export async function POST(req: NextRequest) {
   try {
-    // 1) JSON: image_url 1件 or image_urls 配列
+    // 1) JSON: image_url 1件 or image_urls 配列のみ受け付け
     const { image_url, image_urls } = (await req.json().catch(() => ({}))) as {
-      image_url?: string; image_urls?: string[];
+      image_url?: string;
+      image_urls?: string[];
     };
     const urls = (image_urls?.length ? image_urls : [image_url]).filter(
       (u): u is string => typeof u === 'string' && u.trim().length > 0
     );
     if (!urls.length) {
-      return NextResponse.json({ ok: false, error: 'image_url（または image_urls[]）が必要です。' }, { status: 400 });
+      return NextResponse.json(
+        { ok: false, error: 'image_url（または image_urls[]）が必要です。' },
+        { status: 400 }
+      );
     }
 
-    // 2) OpenAIへ：まずURLをhttps化＋エンコード → サーバ側で dataURL に変換して渡す
+    // 2) 画像URLを https 化→エンコード → サーバ側で dataURL に変換
     const safeUrls = urls
       .map((u) => (u || '').trim())
       .filter((u) => u.length > 0)
@@ -57,60 +72,53 @@ export async function POST(req: NextRequest) {
     }
     const dataImages = await Promise.all(safeUrls.map(urlToDataUrl));
 
+    // dataURL → Responses API の image_data 形式に
+    function dataUrlToPart(dataUrl: string) {
+      const m = dataUrl.match(/^data:([^;]+);base64,(.+)$/s);
+      if (!m) throw new Error('invalid data url');
+      const media = m[1];
+      const b64 = m[2];
+      return { type: 'input_image', image_data: { b64, media_type: media } };
+    }
+    const imageParts = dataImages.map(dataUrlToPart);
+
     const userText = [
       'これらの画像を総合して上記フォーマットの JSON だけを出力してください。',
       '相場は国内フリマ/オークション/古物市を前提。',
       '足りない視点は must_shoot_more に列挙してください。'
     ].join('\n');
-// 【差し替え開始】
-function dataUrlToPart(dataUrl: string) {
-  const m = dataUrl.match(/^data:([^;]+);base64,(.+)$/s);
-  if (!m) throw new Error('invalid data url');
-  const media = m[1]; // 例: image/jpeg
-  const b64 = m[2];   // base64 本体
-  return { type: 'input_image', image_data: { b64, media_type: media } };
-}
-const imageParts = dataImages.map(dataUrlToPart);
 
-const resp = await client.responses.create({
-  model: 'gpt-4o-mini',
-  temperature: 0.2,
-  input: [
-    {
-      role: 'system',
-      content: [
+    // 3) OpenAI（Responses API）
+    const resp = await client.responses.create({
+      model: 'gpt-4o-mini',
+      temperature: 0.2,
+      input: [
         {
-          type: 'input_text',
-          text:
-            'あなたは中古リユース査定AI「カンテノ」。画像(1枚以上)を総合判断し、日本語で JSON を厳密に返す。テキスト以外は出力しない。\n' +
-            'フィールド:\n' +
-            '- category, brand, title_guess, material, period\n' +
-            '- authenticity_risk, missing_parts, defect_notes\n' +
-            '- must_shoot_more: string[]\n' +
-            '- base_price_jpy: number\n' +
-            '- condition_grade: "A"|"B"|"C"|"D"|"E"\n' +
-            '- confidence: number（0-100）\n' +
-            '- reasons: string'
+          role: 'system',
+          content: [
+            {
+              type: 'input_text',
+              text:
+                'あなたは中古リユース査定AI「カンテノ」。画像(1枚以上)を総合判断し、日本語で JSON を厳密に返す。テキスト以外は出力しない。\n' +
+                'フィールド:\n' +
+                '- category, brand, title_guess, material, period\n' +
+                '- authenticity_risk, missing_parts, defect_notes\n' +
+                '- must_shoot_more: string[]\n' +
+                '- base_price_jpy: number\n' +
+                '- condition_grade: "A"|"B"|"C"|"D"|"E"\n' +
+                '- confidence: number（0-100）\n' +
+                '- reasons: string'
+            }
+          ]
+        },
+        {
+          role: 'user',
+          content: [{ type: 'input_text', text: userText }, ...imageParts]
         }
       ]
-    },
-    {
-      role: 'user',
-      content: [
-        { type: 'input_text', text: userText },
-        ...imageParts // ← data URL → image_data 化して渡す
-      ]
-    }
-  ]
-} as any);
+    } as any);
 
-const raw =
-  (resp as any).output_text ??
-  ((resp as any).output?.[0]?.content
-    ?.map((c: any) => (c?.type === 'output_text' ? c.text : c?.text ?? ''))
-    .join('')) ??
-  '';
-// 【差し替え終了】
+    // 4) テキスト抽出
     const raw =
       (resp as any).output_text ??
       ((resp as any).output?.[0]?.content
@@ -118,23 +126,25 @@ const raw =
         .join('')) ??
       '';
 
-    // 3) JSON パース
+    // 5) JSON パース
     let parsed: ModelJson;
     try {
       const m = raw.match(/\{[\s\S]*\}$/);
       parsed = JSON.parse(m ? m[0] : raw) as ModelJson;
-    } catch { parsed = {}; }
+    } catch {
+      parsed = {};
+    }
 
-    // 4) 価格レンジ
+    // 6) 価格レンジ
     const base = toInt(parsed.base_price_jpy, 0);
     const grade = ((parsed.condition_grade || 'C') as string).toUpperCase() as keyof typeof GRADE_COEF;
     const coef = GRADE_COEF[grade] ?? GRADE_COEF.C;
     const mid = Math.max(0, Math.round(base * coef));
     const { min, max } = bandFromMid(mid, toInt(parsed.confidence, 0));
 
-    // 5) 表示用
+    // 7) 表示用テキスト
     const lines: string[] = [];
-    lines.push('査定する','');
+    lines.push('査定する', '');
     lines.push(`推定カテゴリ: ${parsed.category ?? ''}`);
     lines.push(`推定ブランド: ${parsed.brand ?? ''}`);
     lines.push(`推定名称/型: ${parsed.title_guess ?? ''}`);
@@ -150,10 +160,12 @@ const raw =
     if (parsed.must_shoot_more?.length) lines.push(`追撮推奨: ${parsed.must_shoot_more.join(' / ')}`);
     const output_text = lines.join('\n');
 
+    // 8) メルカリ用
     const cleanup = (s: string) => s.replace(/\s+/g, ' ').trim();
-    const mercariTitle = cleanup(
+    const mercari_title = cleanup(
       [parsed.brand ?? '', parsed.title_guess ?? '', parsed.material ?? '', parsed.period ?? '']
-        .filter(Boolean).join(' ')
+        .filter(Boolean)
+        .join(' ')
     ).slice(0, 40);
 
     const desc: string[] = [];
@@ -170,8 +182,9 @@ const raw =
     if (parsed.authenticity_risk) desc.push(`【真贋メモ】${parsed.authenticity_risk}`);
     if (parsed.must_shoot_more?.length) desc.push(`【追加推奨カット】${parsed.must_shoot_more.join(' / ')}`);
     desc.push('※本テキストはAIによる自動生成の参考情報です。');
-    const mercariDescription = desc.join('\n').slice(0, 500);
+    const mercari_description = desc.join('\n').slice(0, 500);
 
+    // 9) レスポンス
     return NextResponse.json({
       ok: true,
       price: { min, mid, max },
@@ -182,22 +195,28 @@ const raw =
         brand: parsed.brand ?? '',
         title_guess: parsed.title_guess ?? '',
         material: parsed.material ?? '',
-        period: parsed.period ?? '',
+        period: parsed.period ?? ''
       },
       reasons: parsed.reasons ?? '',
       must_shoot_more: parsed.must_shoot_more ?? [],
       output_text,
-      mercari_title: mercariTitle,
-      mercari_description: mercariDescription,
-      raw_model_json: parsed,
+      mercari_title,
+      mercari_description,
+      raw_model_json: parsed
     });
   } catch (err: any) {
     const msg = typeof err?.message === 'string' ? err.message : 'Unknown server error';
-    return NextResponse.json({
-      ok: false, error: msg,
-      output_text: '査定処理でエラーが発生しました。画像サイズまたは通信環境をご確認ください。',
-      mercari_title: '【仮】カンテノ自動査定',
-      mercari_description: '一時的なエラーにより詳細を生成できませんでした。時間を空けて再度お試しください。'
-    }, { status: 500 });
+    return NextResponse.json(
+      {
+        ok: false,
+        error: msg,
+        output_text:
+          '査定処理でエラーが発生しました。画像サイズまたは通信環境をご確認ください。',
+        mercari_title: '【仮】カンテノ自動査定',
+        mercari_description:
+          '一時的なエラーにより詳細を生成できませんでした。時間を空けて再度お試しください。'
+      },
+      { status: 500 }
+    );
   }
 }
