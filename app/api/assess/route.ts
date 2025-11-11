@@ -62,39 +62,55 @@ export async function POST(req: NextRequest) {
       '相場は国内フリマ/オークション/古物市を前提。',
       '足りない視点は must_shoot_more に列挙してください。'
     ].join('\n');
+// 【差し替え開始】
+function dataUrlToPart(dataUrl: string) {
+  const m = dataUrl.match(/^data:([^;]+);base64,(.+)$/s);
+  if (!m) throw new Error('invalid data url');
+  const media = m[1]; // 例: image/jpeg
+  const b64 = m[2];   // base64 本体
+  return { type: 'input_image', image_data: { b64, media_type: media } };
+}
+const imageParts = dataImages.map(dataUrlToPart);
 
-    const resp = await client.responses.create({
-      model: 'gpt-4o-mini',
-      temperature: 0.2,
-      input: [
+const resp = await client.responses.create({
+  model: 'gpt-4o-mini',
+  temperature: 0.2,
+  input: [
+    {
+      role: 'system',
+      content: [
         {
-          role: 'system',
-          content: [
-            {
-              type: 'input_text',
-              text:
-                'あなたは中古リユース査定AI「カンテノ」。画像(1枚以上)を総合判断し、日本語で JSON を厳密に返す。テキスト以外は出力しない。\n' +
-                'フィールド:\n' +
-                '- category, brand, title_guess, material, period\n' +
-                '- authenticity_risk, missing_parts, defect_notes\n' +
-                '- must_shoot_more: string[]\n' +
-                '- base_price_jpy: number\n' +
-                '- condition_grade: "A"|"B"|"C"|"D"|"E"\n' +
-                '- confidence: number（0-100）\n' +
-                '- reasons: string'
-            }
-          ]
-        },
-        {
-          role: 'user',
-          content: [
-            { type: 'input_text', text: userText },
-            ...dataImages.map((dataUrl) => ({ type: 'input_image', image_url: dataUrl }))
-          ]
+          type: 'input_text',
+          text:
+            'あなたは中古リユース査定AI「カンテノ」。画像(1枚以上)を総合判断し、日本語で JSON を厳密に返す。テキスト以外は出力しない。\n' +
+            'フィールド:\n' +
+            '- category, brand, title_guess, material, period\n' +
+            '- authenticity_risk, missing_parts, defect_notes\n' +
+            '- must_shoot_more: string[]\n' +
+            '- base_price_jpy: number\n' +
+            '- condition_grade: "A"|"B"|"C"|"D"|"E"\n' +
+            '- confidence: number（0-100）\n' +
+            '- reasons: string'
         }
       ]
-    } as any);
+    },
+    {
+      role: 'user',
+      content: [
+        { type: 'input_text', text: userText },
+        ...imageParts // ← data URL → image_data 化して渡す
+      ]
+    }
+  ]
+} as any);
 
+const raw =
+  (resp as any).output_text ??
+  ((resp as any).output?.[0]?.content
+    ?.map((c: any) => (c?.type === 'output_text' ? c.text : c?.text ?? ''))
+    .join('')) ??
+  '';
+// 【差し替え終了】
     const raw =
       (resp as any).output_text ??
       ((resp as any).output?.[0]?.content
