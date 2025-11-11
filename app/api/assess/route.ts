@@ -1,8 +1,9 @@
 // /app/api/assess/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
+import { Buffer } from 'node:buffer';
 
-export const runtime = 'nodejs';        // 安定重視
+export const runtime = 'nodejs';               // node なので Buffer が使える
 export const dynamic = 'force-dynamic';
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
@@ -40,71 +41,66 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: 'image_url（または image_urls[]）が必要です。' }, { status: 400 });
     }
 
-    // 2) OpenAIへ（まずURLを安全化→サーバでデータURL化して渡す）
-const userText = [
-  'これらの画像を総合して上記フォーマットの JSON だけを出力してください。',
-  '相場は国内フリマ/オークション/古物市を前提。',
-  '足りない視点は must_shoot_more に列挙してください。'
-].join('\n');
+    // 2) OpenAIへ：まずURLをhttps化＋エンコード → サーバ側で dataURL に変換して渡す
+    const safeUrls = urls
+      .map((u) => (u || '').trim())
+      .filter((u) => u.length > 0)
+      .map((u) => encodeURI(u.replace(/^http:\/\//i, 'https://')));
 
-// https化＆エンコード
-const safeUrls = (imageUrls || [])
-  .map((u) => (u || '').trim())
-  .filter((u) => u.length > 0)
-  .map((u) => encodeURI(u.replace(/^http:\/\//i, 'https://')));
+    async function urlToDataUrl(u: string): Promise<string> {
+      const res = await fetch(u);
+      if (!res.ok) throw new Error(`fetch failed: ${res.status} ${u}`);
+      const ct = res.headers.get('content-type') || 'image/jpeg';
+      const buf = Buffer.from(await res.arrayBuffer());
+      const b64 = buf.toString('base64');
+      return `data:${ct};base64,${b64}`;
+    }
+    const dataImages = await Promise.all(safeUrls.map(urlToDataUrl));
 
-// URL→dataURL（Edgeではなく nodejs ランタイムなので Buffer が使えます）
-async function urlToDataUrl(u: string): Promise<string> {
-  const res = await fetch(u);
-  if (!res.ok) throw new Error(`fetch failed: ${res.status} ${u}`);
-  const ct = res.headers.get('content-type') || 'image/jpeg';
-  const buf = Buffer.from(await res.arrayBuffer());
-  const b64 = buf.toString('base64');
-  return `data:${ct};base64,${b64}`;
-}
+    const userText = [
+      'これらの画像を総合して上記フォーマットの JSON だけを出力してください。',
+      '相場は国内フリマ/オークション/古物市を前提。',
+      '足りない視点は must_shoot_more に列挙してください。'
+    ].join('\n');
 
-// ここで全画像を data URL に
-const dataImages = await Promise.all(safeUrls.map(urlToDataUrl));
-
-const resp = await client.responses.create({
-  model: 'gpt-4o-mini',
-  temperature: 0.2,
-  input: [
-    {
-      role: 'system',
-      content: [
+    const resp = await client.responses.create({
+      model: 'gpt-4o-mini',
+      temperature: 0.2,
+      input: [
         {
-          type: 'input_text',
-          text:
-            'あなたは中古リユース査定AI「カンテノ」。画像(1枚以上)を総合判断し、日本語で JSON を厳密に返す。テキスト以外は出力しない。\n' +
-            'フィールド:\n' +
-            '- category, brand, title_guess, material, period\n' +
-            '- authenticity_risk, missing_parts, defect_notes\n' +
-            '- must_shoot_more: string[]\n' +
-            '- base_price_jpy: number\n' +
-            '- condition_grade: "A"|"B"|"C"|"D"|"E"\n' +
-            '- confidence: number（0-100）\n' +
-            '- reasons: string'
+          role: 'system',
+          content: [
+            {
+              type: 'input_text',
+              text:
+                'あなたは中古リユース査定AI「カンテノ」。画像(1枚以上)を総合判断し、日本語で JSON を厳密に返す。テキスト以外は出力しない。\n' +
+                'フィールド:\n' +
+                '- category, brand, title_guess, material, period\n' +
+                '- authenticity_risk, missing_parts, defect_notes\n' +
+                '- must_shoot_more: string[]\n' +
+                '- base_price_jpy: number\n' +
+                '- condition_grade: "A"|"B"|"C"|"D"|"E"\n' +
+                '- confidence: number（0-100）\n' +
+                '- reasons: string'
+            }
+          ]
+        },
+        {
+          role: 'user',
+          content: [
+            { type: 'input_text', text: userText },
+            ...dataImages.map((dataUrl) => ({ type: 'input_image', image_url: dataUrl }))
+          ]
         }
       ]
-    },
-    {
-      role: 'user',
-      content: [
-        { type: 'input_text', text: userText },
-        ...dataImages.map((dataUrl) => ({ type: 'input_image', image_url: dataUrl }))
-      ]
-    }
-  ]
-} as any);
+    } as any);
 
-// テキスト抽出
-const raw =
-  (resp as any).output_text ??
-  ((resp as any).output?.[0]?.content
-    ?.map((c: any) => (c?.type === 'output_text' ? c.text : c?.text ?? ''))
-    .join('')) ??
-  '';
+    const raw =
+      (resp as any).output_text ??
+      ((resp as any).output?.[0]?.content
+        ?.map((c: any) => (c?.type === 'output_text' ? c.text : c?.text ?? ''))
+        .join('')) ??
+      '';
 
     // 3) JSON パース
     let parsed: ModelJson;
