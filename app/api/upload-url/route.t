@@ -2,29 +2,31 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 
-export const runtime = 'edge' // 軽い処理なのでEdgeでOK
+export const runtime = 'edge'
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY! // Server専用
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!  // Server-only
 
 export async function POST(req: Request) {
   try {
-    const { filename, contentType } = await req.json()
-    if (!filename || !contentType) {
-      return NextResponse.json({ ok:false, message:'bad request' }, { status:400 })
-    }
+    const { filename } = await req.json()
+    if (!filename) return NextResponse.json({ ok:false, message:'filename required' }, { status:400 })
 
     const supa = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, { auth:{ persistSession:false } })
-    const bucket = 'assessment_uploads'
-    const objectPath = user/${Date.now()}_${encodeURIComponent(filename)}
+    const bucket = 'uploads'                               // ← あなたのバケット名
+    const objectPath = mobile/${Date.now()}_${encodeURIComponent(filename)}
 
     const { data, error } = await supa.storage.from(bucket).createSignedUploadUrl(objectPath)
     if (error) throw error
 
-    // 公開バケット前提：すぐ見れるURLを返す
-    const publicUrl = ${SUPABASE_URL}/storage/v1/object/public/${bucket}/${objectPath}
-
-    return NextResponse.json({ ok:true, signedUrl: data.signedUrl, publicUrl })
+    // token と path を必ず返す（クライアントで uploadToSignedUrl に使う）
+    return NextResponse.json({
+      ok: true,
+      bucket,
+      path: objectPath,
+      token: data.token,
+      publicUrl: ${SUPABASE_URL}/storage/v1/object/public/${bucket}/${objectPath} // 公開バケットなら即見える
+    })
   } catch (e:any) {
     return NextResponse.json({ ok:false, message: e?.message ?? 'server error' }, { status:500 })
   }
