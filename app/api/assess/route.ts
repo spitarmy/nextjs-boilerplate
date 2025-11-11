@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
 import { Buffer } from 'node:buffer';
 
-export const runtime = 'nodejs';          // Bufferが使える
+export const runtime = 'nodejs';          // Buffer が使える
 export const dynamic = 'force-dynamic';
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
@@ -39,48 +39,45 @@ function bandFromMid(mid: number, confidence: number) {
   return { min, max };
 }
 
+// URL → dataURL（https化・エンコードしてから取得）
+async function urlToDataUrl(u: string): Promise<string> {
+  const safe = encodeURI(u.trim().replace(/^http:\/\//i, 'https://'));
+  const res = await fetch(safe);
+  if (!res.ok) throw new Error(`fetch failed: ${res.status} ${safe}`);
+  const ct = res.headers.get('content-type') || 'image/jpeg';
+  const buf = Buffer.from(await res.arrayBuffer());
+  const b64 = buf.toString('base64');
+  return `data:${ct};base64,${b64}`;
+}
+
+// dataURL → Responses API の image_data 形式へ
+function dataUrlToPart(dataUrl: string) {
+  const m = dataUrl.match(/^data:([^;]+);base64,([\s\S]+)$/);
+  if (!m) throw new Error('invalid data url');
+  const media_type = m[1];
+  const b64 = m[2];
+  return { type: 'input_image', image_data: { b64, media_type } };
+}
+
 export async function POST(req: NextRequest) {
   try {
-    // 1) JSON: image_url 1件 or image_urls 配列のみ受け付け
+    // 1) 入力：image_urls（推奨） / 互換: image_url（単体）
     const { image_url, image_urls } = (await req.json().catch(() => ({}))) as {
       image_url?: string;
       image_urls?: string[];
     };
-    const urls = (image_urls?.length ? image_urls : [image_url]).filter(
-      (u): u is string => typeof u === 'string' && u.trim().length > 0
-    );
+    const urls = (image_urls && image_urls.length ? image_urls : (image_url ? [image_url] : []))
+      .filter((u): u is string => typeof u === 'string' && u.trim().length > 0);
+
     if (!urls.length) {
       return NextResponse.json(
-        { ok: false, error: 'image_url（または image_urls[]）が必要です。' },
+        { ok: false, error: 'image_urls（配列）が必要です。互換で image_url 1件でも可。' },
         { status: 400 }
       );
     }
 
-    // 2) 画像URLを https 化→エンコード → サーバ側で dataURL に変換
-    const safeUrls = urls
-      .map((u) => (u || '').trim())
-      .filter((u) => u.length > 0)
-      .map((u) => encodeURI(u.replace(/^http:\/\//i, 'https://')));
-
-    async function urlToDataUrl(u: string): Promise<string> {
-      const res = await fetch(u);
-      if (!res.ok) throw new Error(`fetch failed: ${res.status} ${u}`);
-      const ct = res.headers.get('content-type') || 'image/jpeg';
-      const buf = Buffer.from(await res.arrayBuffer());
-      const b64 = buf.toString('base64');
-      return `data:${ct};base64,${b64}`;
-    }
-    const dataImages = await Promise.all(safeUrls.map(urlToDataUrl));
-
-    // dataURL → Responses API の image_data 形式に
-    function dataUrlToPart(dataUrl: string) {
-  // dotAll(/s) を使わず [\s\S]+ で代替
-  const m = dataUrl.match(/^data:([^;]+);base64,([\s\S]+)$/);
-  if (!m) throw new Error('invalid data url');
-  const media = m[1];
-  const b64   = m[2];
-  return { type: 'input_image', image_data: { b64, media_type: media } };
-}
+    // 2) 画像を dataURL 化 → image_data へ（OpenAI には常に image_data で渡す）
+    const dataImages = await Promise.all(urls.map(urlToDataUrl));
     const imageParts = dataImages.map(dataUrlToPart);
 
     const userText = [
@@ -143,7 +140,7 @@ export async function POST(req: NextRequest) {
     const mid = Math.max(0, Math.round(base * coef));
     const { min, max } = bandFromMid(mid, toInt(parsed.confidence, 0));
 
-    // 7) 表示用テキスト
+    // 7) 画面表示用
     const lines: string[] = [];
     lines.push('査定する', '');
     lines.push(`推定カテゴリ: ${parsed.category ?? ''}`);
