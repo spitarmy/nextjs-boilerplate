@@ -44,12 +44,12 @@ function bandFromMid(mid: number, confidence: number) {
   return { min, max };
 }
 
-// Edge でも動く ArrayBuffer -> base64
+// Edge 用 ArrayBuffer -> base64
 function abToBase64(buf: ArrayBuffer) {
   let s = '';
   const bytes = new Uint8Array(buf);
   for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
-  // @ts-ignore - Edge で btoa 可
+  // @ts-ignore Edge では btoa 可
   return btoa(s);
 }
 
@@ -83,6 +83,18 @@ export async function POST(req: NextRequest) {
     }
 
     // 2) OpenAI へ問い合わせ（画像マルチ）
+    const userText = [
+      'これらの画像を総合して上記フォーマットの JSON だけを出力してください。',
+      '相場は国内フリマ/オークション/古物市を前提。',
+      '足りない視点は must_shoot_more に列挙してください。',
+    ].join('\n');
+
+    // ★ 型ずれ対策：content 配列を any として渡す（実行時仕様には合致）
+    const userContent: any = [
+      { type: 'text', text: userText },
+      ...imageUrls.map((url) => ({ type: 'image_url', image_url: { url } })),
+    ];
+
     const completion = await client.chat.completions.create({
       model: 'gpt-4o-mini',
       temperature: 0.2,
@@ -104,20 +116,7 @@ export async function POST(req: NextRequest) {
             '- reasons: string（根拠を簡潔に。箇条書き可）',
           ].join('\n'),
         },
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'text',
-              text: [
-                'これらの画像を総合して上記フォーマットの JSON だけを出力してください。',
-                '相場は国内フリマ/オークション/古物市を前提。',
-                '足りない視点は must_shoot_more に列挙してください。',
-              ].join('\n'),
-            },
-            ...imageUrls.map((url) => ({ type: 'image_url', image_url: { url } })),
-          ],
-        },
+        { role: 'user', content: userContent } as any,
       ],
     });
 
@@ -139,7 +138,7 @@ export async function POST(req: NextRequest) {
     const mid = Math.max(0, Math.round(base * coef));
     const { min, max } = bandFromMid(mid, toInt(parsed.confidence, 0));
 
-    // 5) 画面表示用テキスト（安全な push 方式）
+    // 5) 画面表示用テキスト（push 方式）
     const lines: string[] = [];
     lines.push('査定する', '');
     lines.push(`推定カテゴリ: ${parsed.category ?? ''}`);
@@ -159,11 +158,10 @@ export async function POST(req: NextRequest) {
     }
     const output_text = lines.join('\n');
 
-    // 5.1) メルカリ用（タイトル40 / 説明500）も push 方式
+    // 5.1) メルカリ用（40/500）
     function cleanupSpaces(s: string) {
       return s.replace(/\s+/g, ' ').trim();
     }
-
     const mercariTitleRaw = cleanupSpaces(
       [parsed.brand ?? '', parsed.title_guess ?? '', parsed.material ?? '', parsed.period ?? '']
         .filter(Boolean)
@@ -189,7 +187,6 @@ export async function POST(req: NextRequest) {
       descParts.push(`【追加推奨カット】${parsed.must_shoot_more.join(' / ')}`);
     }
     descParts.push('※本テキストはAIによる自動生成の参考情報です。');
-
     const mercariDescription = descParts.join('\n').slice(0, 500);
 
     // 6) レスポンス
