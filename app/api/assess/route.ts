@@ -17,21 +17,15 @@ type ModelJson = {
   condition_grade?: 'A'|'B'|'C'|'D'|'E'; confidence?: number; reasons?: string;
 };
 
-const toInt = (n: unknown, fallback = 0) => {
-  const v = Number(n);
-  return Number.isFinite(v) ? Math.round(v) : fallback;
-};
-
-function bandFromMid(mid: number, confidence: number) {
-  const w = confidence < 60 ? 0.2 : 0.1;
+const toInt = (n: unknown, fb = 0) => (Number.isFinite(Number(n)) ? Math.round(Number(n)) : fb);
+const bandFromMid = (mid: number, conf: number) => {
+  const w = conf < 60 ? 0.2 : 0.1;
   const min = Math.max(0, Math.floor(mid * (1 - w)));
   const max = Math.max(min, Math.ceil(mid * (1 + w)));
   return { min, max };
-}
+};
 
-// ---- 画像ユーティリティ -------------------------------------------------
-
-// Content-Type を OpenAI が受け付ける安全な media_type に正規化
+// ---- 画像 utils ----------------------------------------------------------
 function normalizeMediaType(ct: string | null): 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif' {
   const raw = (ct || '').toLowerCase().split(';')[0].trim();
   if (raw === 'image/jpg') return 'image/jpeg';
@@ -39,11 +33,16 @@ function normalizeMediaType(ct: string | null): 'image/jpeg' | 'image/png' | 'im
   if (raw === 'image/png')  return 'image/png';
   if (raw === 'image/webp') return 'image/webp';
   if (raw === 'image/gif')  return 'image/gif';
-  // それ以外は jpeg に寄せる
   return 'image/jpeg';
 }
 
-// URL → dataURL
+async function fileToPart(file: File) {
+  const buf = Buffer.from(await file.arrayBuffer());
+  const b64 = buf.toString('base64');
+  const media_type = normalizeMediaType(file.type || 'image/jpeg');
+  return { type: 'input_image', image_data: { b64, media_type } };
+}
+
 async function urlToDataUrl(u: string): Promise<string> {
   const safe = encodeURI(u.trim().replace(/^http:\/\//i, 'https://'));
   const res = await fetch(safe);
@@ -53,8 +52,6 @@ async function urlToDataUrl(u: string): Promise<string> {
   const b64 = buf.toString('base64');
   return `data:${media};base64,${b64}`;
 }
-
-// dataURL → image_data パーツ
 function dataUrlToPart(dataUrl: string) {
   const m = dataUrl.match(/^data:([^;]+);base64,([\s\S]+)$/);
   if (!m) throw new Error('invalid data url');
@@ -63,26 +60,38 @@ function dataUrlToPart(dataUrl: string) {
   return { type: 'input_image', image_data: { b64, media_type } };
 }
 
-// ---- ここからメイン ------------------------------------------------------
-
+// ---- メイン --------------------------------------------------------------
 export async function POST(req: NextRequest) {
   try {
-    // 1) 入力の取り出し（image_urls 推奨／image_url 互換）
-    const { image_url, image_urls } = (await req.json().catch(() => ({}))) as {
-      image_url?: string; image_urls?: string[];
-    };
-    const urls = (image_urls && image_urls.length ? image_urls : (image_url ? [image_url] : []))
-      .filter((u): u is string => typeof u === 'string' && u.trim().length > 0);
+    const ct = req.headers.get('content-type') || '';
+    let imageParts: any[] = [];
 
-    if (!urls.length) {
-      return NextResponse.json({ ok: false, error: 'image_urls（配列）または image_url（単体）が必要です。' }, { status: 400 });
+    if (ct.includes('multipart/form-data')) {
+      // フロントからFileをそのまま送ってきたケース
+      const form = await req.formData();
+      const files = Array.from(form.values()).filter((v): v is File => v instanceof File);
+      if (!files.length) {
+        return NextResponse.json({ ok: false, error: '画像ファイルが見つかりません。' }, { status: 400 });
+      }
+      imageParts = await Promise.all(files.map(fileToPart));
+    } else {
+      // JSON: image_urls or image_url
+      const { image_url, image_urls } = (await req.json().catch(() => ({}))) as {
+        image_url?: string; image_urls?: string[];
+      };
+      const urls = (image_urls?.length ? image_urls : (image_url ? [image_url] : []))
+        .filter((u): u is string => typeof u === 'string' && u.trim().length > 0);
+
+      if (!urls.length) {
+        return NextResponse.json(
+          { ok: false, error: 'image_urls（配列）または multipart の画像ファイルを送ってください。' },
+          { status: 400 }
+        );
+      }
+      const dataImages = await Promise.all(urls.map(urlToDataUrl));
+      imageParts = dataImages.map(dataUrlToPart);
     }
 
-    // 2) 画像を dataURL 化 → image_data へ（OpenAI には常に image_data で渡す）
-    const dataImages = await Promise.all(urls.map(urlToDataUrl));
-    const imageParts = dataImages.map(dataUrlToPart);
-
-    // 3) OpenAI（Responses API）
     const userText = [
       'これらの画像を総合して上記フォーマットの JSON だけを出力してください。',
       '相場は国内フリマ/オークション/古物市を前提。',
@@ -111,10 +120,7 @@ export async function POST(req: NextRequest) {
             }
           ]
         },
-        {
-          role: 'user',
-          content: [{ type: 'input_text', text: userText }, ...imageParts]
-        }
+        { role: 'user', content: [{ type: 'input_text', text: userText }, ...imageParts] }
       ]
     } as any;
 
@@ -122,32 +128,30 @@ export async function POST(req: NextRequest) {
     try {
       resp = await client.responses.create(payload);
     } catch (e: any) {
-      // OpenAIの検証エラー内容をそのまま返す（原因特定用）
       const detail = e?.response?.data ?? e?.message ?? String(e);
-      return NextResponse.json({ ok: false, error: 'openai_error', detail, debug: { partKinds: imageParts.map(p => Object.keys(p)[0]) } }, { status: 500 });
+      return NextResponse.json(
+        { ok: false, error: 'openai_error', detail, debug: { parts: imageParts.map(p => Object.keys(p)[0]) } },
+        { status: 500 }
+      );
     }
 
-    // 4) テキスト抽出
     const raw =
       resp.output_text ??
       (resp.output?.[0]?.content?.map((c: any) => (c?.type === 'output_text' ? c.text : c?.text ?? '')).join('')) ??
       '';
 
-    // 5) JSON パース
     let parsed: ModelJson;
     try {
       const m = raw.match(/\{[\s\S]*\}$/);
       parsed = JSON.parse(m ? m[0] : raw) as ModelJson;
     } catch { parsed = {}; }
 
-    // 6) 価格レンジ
     const base = toInt(parsed.base_price_jpy, 0);
     const grade = ((parsed.condition_grade || 'C') as string).toUpperCase() as keyof typeof GRADE_COEF;
     const coef = GRADE_COEF[grade] ?? GRADE_COEF.C;
     const mid = Math.max(0, Math.round(base * coef));
     const { min, max } = bandFromMid(mid, toInt(parsed.confidence, 0));
 
-    // 7) 表示用
     const lines: string[] = [];
     lines.push('査定する', '');
     lines.push(`推定カテゴリ: ${parsed.category ?? ''}`);
@@ -165,7 +169,6 @@ export async function POST(req: NextRequest) {
     if (parsed.must_shoot_more?.length) lines.push(`追撮推奨: ${parsed.must_shoot_more.join(' / ')}`);
     const output_text = lines.join('\n');
 
-    // 8) メルカリ用
     const cleanup = (s: string) => s.replace(/\s+/g, ' ').trim();
     const mercari_title = cleanup(
       [parsed.brand ?? '', parsed.title_guess ?? '', parsed.material ?? '', parsed.period ?? '']
@@ -210,12 +213,15 @@ export async function POST(req: NextRequest) {
     });
   } catch (err: any) {
     const msg = typeof err?.message === 'string' ? err.message : 'Unknown server error';
-    return NextResponse.json({
-      ok: false,
-      error: msg,
-      output_text: '査定処理でエラーが発生しました。画像サイズまたは通信環境をご確認ください。',
-      mercari_title: '【仮】カンテノ自動査定',
-      mercari_description: '一時的なエラーにより詳細を生成できませんでした。時間を空けて再度お試しください。'
-    }, { status: 500 });
+    return NextResponse.json(
+      {
+        ok: false,
+        error: msg,
+        output_text: '査定処理でエラーが発生しました。画像サイズまたは通信環境をご確認ください。',
+        mercari_title: '【仮】カンテノ自動査定',
+        mercari_description: '一時的なエラーにより詳細を生成できませんでした。時間を空けて再度お試しください。'
+      },
+      { status: 500 }
+    );
   }
 }
