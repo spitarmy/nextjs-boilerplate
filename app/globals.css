@@ -1,3 +1,108 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+/* === カンテノ用 追加スタイル === */
+:root {
+  --bg-grad-1: #0f172a; /* slate-900 */
+  --bg-grad-2: #1f2937; /* gray-800 */
+  --card-bg: #ffffff;
+  --card-border: #e5e7eb;
+  --text-main: #111827;
+  --text-sub: #6b7280;
+  --brand: #111827;
+  --accent: #0ea5e9; /* sky-500 */
+}
+
+html, body {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color: var(--text-main);
+  background:
+    radial-gradient(1200px 600px at 10% -10%, rgba(14,165,233,.15), transparent 50%),
+    radial-gradient(1200px 600px at 110% 10%, rgba(99,102,241,.18), transparent 50%),
+    linear-gradient(180deg, var(--bg-grad-1), var(--bg-grad-2));
+}
+
+/* コンテンツ幅とセンタリング */
+.site {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 32px 16px 48px;
+}
+
+/* ヘッダー */
+.siteHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 4px 20px;
+  color: #fff;
+}
+
+.brand {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.logo {
+  width: 36px; height: 36px;
+  display: grid; place-items: center;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #0ea5e9, #6366f1);
+  color: #fff;
+  font-weight: 700;
+  letter-spacing: .5px;
+}
+
+.brandTitle {
+  font-weight: 700;
+  color: #fff;
+  font-size: 18px;
+}
+.brandSub {
+  color: rgba(255,255,255,.75);
+  font-size: 12px;
+}
+
+/* メインカード */
+.card {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 14px;
+  padding: 20px;
+  box-shadow:
+    0 10px 25px rgba(0,0,0,.08),
+    0 2px 6px rgba(0,0,0,.04);
+}
+
+/* フッター */
+.siteFooter {
+  color: rgba(255,255,255,.8);
+  text-align: center;
+  padding: 20px 0 0;
+}
+
+/* 汎用：ボタン/入力の見た目が地味なとき用（必要なら） */
+button {
+  background: linear-gradient(180deg, #111827, #0b1220);
+  color: #fff;
+  border: 0;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+button[disabled] { opacity: .6; cursor: not-allowed; }
+
+input[type="file"] {
+  padding: 8px 0;
+}
+pre, textarea, code {
+  font-family: var(--font-geist-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace);
+}
