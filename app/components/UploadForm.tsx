@@ -2,35 +2,32 @@
 'use client';
 
 import React, { useState } from 'react';
+import { createClient } from '@supabase/supabase-js';
 
-type AssessResponse = {
+type AssessRes = {
   ok: boolean;
   error?: string;
-  detail?: any;
-  debug?: any;
-  price?: { min: number; mid: number; max: number };
-  condition_grade?: string;
-  confidence?: number;
-  meta?: { category: string; brand: string; title_guess: string; material: string; period: string };
-  reasons?: string;
-  must_shoot_more?: string[];
   output_text?: string;
   mercari_title?: string;
   mercari_description?: string;
 };
 
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
+
 export default function UploadForm() {
   const [files, setFiles] = useState<File[]>([]);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<AssessResponse | null>(null);
-  const [showDebug, setShowDebug] = useState(false);
+  const [result, setResult] = useState<AssessRes | null>(null);
 
-  function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const list = Array.from(e.target.files || []);
-    setFiles(list);
+  function onPick(e: React.ChangeEvent<HTMLInputElement>) {
+    const flist = Array.from(e.target.files || []);
+    setFiles(flist);
+    setPreview(flist[0] ? URL.createObjectURL(flist[0]) : null);
     setResult(null);
-    setPreviewUrl(list.length ? URL.createObjectURL(list[0]) : null);
   }
 
   async function onSubmit(e: React.FormEvent) {
@@ -39,101 +36,95 @@ export default function UploadForm() {
 
     setLoading(true);
     setResult(null);
-    setShowDebug(false);
 
     try {
-      // 直接 multipart/form-data で /api/assess に送る（旧 upload-url は使わない）
-      const fd = new FormData();
-      files.forEach((f, i) => fd.append(`file_${i + 1}`, f));
+      // 1) Supabaseへアップロード（公開URLを取得）
+      const urls: string[] = [];
+      for (const f of files) {
+        const ext = (f.name.split('.').pop() || 'jpg').toLowerCase();
+        const path = `mobile/${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+        const { error } = await supabase.storage.from('uploads').upload(path, f, {
+          contentType: f.type || 'image/jpeg',
+          upsert: false,
+        });
+        if (error) throw new Error('アップロード失敗: ' + error.message);
 
-      const res = await fetch('/api/assess', { method: 'POST', body: fd });
-      const json = (await res.json()) as AssessResponse;
-
-      if (!res.ok || !json.ok) {
-        // サーバは必ず error/detail/debug を返すのでUIで見られるように保持
-        setResult(json);
-        setShowDebug(true);
-        throw new Error(json.error || '査定エラー');
+        const { data } = supabase.storage.from('uploads').getPublicUrl(path);
+        if (!data?.publicUrl) throw new Error('公開URL取得エラー');
+        urls.push(data.publicUrl);
       }
 
+      // 2) 査定APIへ
+      const res = await fetch('/api/assess', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image_urls: urls }),
+      });
+
+      const json = (await res.json()) as AssessRes & { detail?: any; debug?: any };
       setResult(json);
-    } catch (err) {
-      // 送信レベルの失敗でもフォールバック文面を表示
-      setResult((prev) => prev ?? {
+
+      // 画面に分かりやすく出す（ネットワークタブが苦手でもOK）
+      if (!json.ok) {
+        console.log('[assess error detail]', json.detail ?? json);
+      }
+    } catch (e: any) {
+      setResult({
         ok: false,
-        error: 'client_error',
-        output_text: '査定処理でエラーが発生しました。画像サイズまたは通信環境をご確認ください。',
+        error:
+          e?.message ||
+          '通信エラー',
+        output_text:
+          '査定処理でエラーが発生しました。画像サイズまたは通信環境をご確認ください。',
         mercari_title: '【仮】カンテノ自動査定',
-        mercari_description: '一時的なエラーにより詳細を生成できませんでした。時間を空けて再度お試しください。'
+        mercari_description:
+          '一時的なエラーにより詳細を生成できませんでした。時間を空けて再度お試しください。',
       });
     } finally {
       setLoading(false);
     }
   }
 
-  function copy(s?: string) {
-    if (!s) return;
-    navigator.clipboard.writeText(s);
-  }
-
   return (
     <form onSubmit={onSubmit} style={{ display: 'grid', gap: 12 }}>
-      <div>
-        <input type="file" multiple accept="image/*" onChange={onPickFile} />
-        {files.length > 0 && <div style={{ fontSize: 12, marginTop: 4 }}>選択: {files.length}枚</div>}
-      </div>
-
-      {previewUrl && (
-        <img src={previewUrl} alt="preview" style={{ maxWidth: 320, borderRadius: 6 }} />
+      <input type="file" accept="image/*" multiple onChange={onPick} />
+      {preview && (
+        <img src={preview} alt="preview" style={{ maxWidth: 320, borderRadius: 6 }} />
       )}
-
-      <button type="submit" disabled={loading || files.length === 0} style={{ padding: '6px 12px' }}>
+      <button type="submit" disabled={loading || files.length === 0}>
         {loading ? '査定中…' : '査定する'}
       </button>
 
       {/* 結果表示 */}
       {result && (
-        <div style={{ borderTop: '1px solid #eee', paddingTop: 12 }}>
-          {result.output_text ? (
-            <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', color: '#111' }}>
-{result.output_text}
-            </pre>
+        <div style={{ marginTop: 8 }}>
+          {result.ok ? (
+            <>
+              <pre style={{ whiteSpace: 'pre-wrap' }}>{result.output_text}</pre>
+              <div style={{ marginTop: 8 }}>
+                <div style={{ fontWeight: 600 }}>メルカリ用タイトル</div>
+                <div>{result.mercari_title}</div>
+                <div style={{ fontWeight: 600, marginTop: 6 }}>メルカリ用説明文</div>
+                <div style={{ whiteSpace: 'pre-wrap' }}>{result.mercari_description}</div>
+              </div>
+            </>
           ) : (
-            <div style={{ color: '#b91c1c' }}>
-              Error: {result.error || 'Unknown'}
-            </div>
-          )}
-
-          {/* メルカリ用 */}
-          <div style={{ marginTop: 16 }}>
-            <div style={{ fontWeight: 600 }}>メルカリ用タイトル</div>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <code style={{ background: '#f9fafb', padding: '4px 6px', borderRadius: 4 }}>
-                {result.mercari_title || '（なし）'}
-              </code>
-              <button type="button" onClick={() => copy(result.mercari_title)}>コピー</button>
-            </div>
-          </div>
-
-          <div style={{ marginTop: 12 }}>
-            <div style={{ fontWeight: 600 }}>メルカリ用説明文</div>
-            <textarea
-              readOnly
-              value={result.mercari_description || ''}
-              rows={6}
-              style={{ width: '100%', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}
-            />
-            <div><button type="button" onClick={() => copy(result.mercari_description)}>コピー</button></div>
-          </div>
-
-          {/* デバッグ詳細 */}
-          {result.ok === false && (
-            <details open={showDebug} style={{ marginTop: 12 }}>
-              <summary style={{ cursor: 'pointer' }}>デバッグ詳細を開く</summary>
-              <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', color: '#374151' }}>
-{JSON.stringify({ error: result.error, detail: result.detail, debug: result.debug }, null, 2)}
-              </pre>
-            </details>
+            <>
+              <div style={{ color: '#b91c1c', marginBottom: 6 }}>
+                Error: {result.error || '不明なエラー'}
+              </div>
+              <div style={{ color: '#374151' }}>
+                査定処理でエラーが発生しました。画像サイズまたは通信環境をご確認ください。
+              </div>
+              <div style={{ marginTop: 8, opacity: 0.8 }}>
+                <div style={{ fontWeight: 600 }}>メルカリ用タイトル</div>
+                <div>{result.mercari_title}</div>
+                <div style={{ fontWeight: 600, marginTop: 6 }}>メルカリ用説明文</div>
+                <div style={{ whiteSpace: 'pre-wrap' }}>
+                  {result.mercari_description}
+                </div>
+              </div>
+            </>
           )}
         </div>
       )}
