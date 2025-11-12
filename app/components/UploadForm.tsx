@@ -1,162 +1,76 @@
 'use client';
-
 import React, { useState } from 'react';
 
-type AssessResponse = {
+type AssessRes = {
   ok: boolean;
   error?: string;
+  detail?: any;
+  debug?: any;
   output_text?: string;
   mercari_title?: string;
   mercari_description?: string;
-  price?: { min: number; mid: number; max: number };
-  condition_grade?: string;
-  confidence?: number;
-  meta?: {
-    category: string; brand: string; title_guess: string; material: string; period: string;
-  };
-  reasons?: string;
-  must_shoot_more?: string[];
-  raw_model_json?: any;
-  detail?: any;  // サーバが返すデバッグ
-  debug?: any;   // サーバが返すデバッグ
 };
 
 export default function UploadForm() {
   const [files, setFiles] = useState<File[]>([]);
-  const [previews, setPreviews] = useState<string[]>([]);
+  const [preview, setPreview] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<AssessResponse | null>(null);
-
-  function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const list = Array.from(e.target.files || []);
-    setFiles(list);
-    setResult(null);
-    setPreviews(list.map((f) => URL.createObjectURL(f)));
-  }
+  const [res, setRes] = useState<AssessRes | null>(null);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!files.length) return;
-
+    setRes(null);
     setLoading(true);
-    setResult(null);
-
     try {
       const fd = new FormData();
-      files.forEach((f, i) => fd.append(`file_${i + 1}`, f, f.name));
-
-      const res = await fetch('/api/assess', { method: 'POST', body: fd });
-
-      // まず生で受けてからJSON化（万一のHTML/テキストも拾う）
-      const text = await res.text();
-      let json: AssessResponse;
-      try { json = JSON.parse(text); } catch { json = { ok: false, error: 'non-json', output_text: text } as any; }
-
-      if (!res.ok || !json.ok) {
-        // サーバの detail/debug を見やすくする
-        setResult({
-          ok: false,
-          error: json.error || '査定エラー',
-          output_text: json.output_text,
-          mercari_title: json.mercari_title,
-          mercari_description: json.mercari_description,
-          detail: (json as any).detail,
-          debug: (json as any).debug,
-        });
-        return;
-      }
-      setResult(json);
+      files.forEach((f, i) => fd.append(`file_${i+1}`, f));
+      const r = await fetch('/api/assess', { method: 'POST', body: fd });
+      const j = await r.json() as AssessRes;
+      if (!r.ok) throw j;
+      setRes(j);
     } catch (err: any) {
-      setResult({
-        ok: false,
-        error: err?.message || '通信エラー',
-        output_text: '査定処理でエラーが発生しました。画像サイズまたは通信環境をご確認ください。',
-        mercari_title: '【仮】カンテノ自動査定',
-        mercari_description: '一時的なエラーにより詳細を生成できませんでした。時間を空けて再度お試しください。',
-      });
+      setRes(typeof err === 'object' ? err : { ok:false, error:String(err) });
     } finally {
       setLoading(false);
     }
   }
 
-  function copyText(s: string) {
-    navigator.clipboard.writeText(s || '');
+  function onPick(e: React.ChangeEvent<HTMLInputElement>) {
+    const fl = Array.from(e.target.files || []);
+    setFiles(fl);
+    setPreview(fl[0] ? URL.createObjectURL(fl[0]) : null);
   }
 
   return (
-    <form onSubmit={onSubmit} style={{ display: 'grid', gap: 16, maxWidth: 980, margin: '0 auto' }}>
-      <div style={{ display: 'grid', gap: 8 }}>
-        <input type="file" accept="image/*" multiple onChange={onPickFile} />
-        {previews.length > 0 && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12 }}>
-            {previews.map((src, i) => (
-              <img key={i} src={src} alt={`preview-${i}`} style={{ width: '100%', borderRadius: 6 }} />
-            ))}
-          </div>
-        )}
-      </div>
-
-      <button type="submit" disabled={loading || files.length === 0} style={{ padding: '8px 14px' }}>
+    <form onSubmit={onSubmit} style={{ display:'grid', gap:12 }}>
+      <input type="file" multiple accept="image/*" onChange={onPick}/>
+      {preview && <img src={preview} alt="preview" style={{maxWidth:320,borderRadius:6}}/>}
+      <button type="submit" disabled={loading || files.length===0}>
         {loading ? '査定中…' : '査定する'}
       </button>
 
-      {result && (
-        <div style={{ borderTop: '1px solid #eee', paddingTop: 12 }}>
-          {result.ok ? (
-            <>
-              <pre style={{ whiteSpace: 'pre-wrap' }}>{result.output_text}</pre>
-
-              <div style={{ marginTop: 12 }}>
-                <div style={{ fontWeight: 700 }}>メルカリ用タイトル</div>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <span>{result.mercari_title}</span>
-                  <button type="button" onClick={() => copyText(result.mercari_title || '')}>コピー</button>
-                </div>
-              </div>
-
-              <div style={{ marginTop: 12 }}>
-                <div style={{ fontWeight: 700 }}>メルカリ用説明文</div>
-                <textarea readOnly value={result.mercari_description || ''} style={{ width: '100%', height: 160 }} />
-              </div>
-            </>
-          ) : (
-            <>
-              <div style={{ color: '#b00020', fontWeight: 600, marginBottom: 8 }}>
-                Error: {result.error || 'unknown'}
-              </div>
-              <div style={{ color: '#666', marginBottom: 12 }}>
-                {result.output_text ||
-                  '査定処理でエラーが発生しました。画像サイズまたは通信環境をご確認ください。'}
-              </div>
-
-              {/* デバッグ（サーバの detail/debug を丸見え表示） */}
-              {(result.detail || result.debug) && (
-                <details open style={{ background: '#fafafa', padding: 12, borderRadius: 6 }}>
-                  <summary>デバッグ詳細</summary>
-                  <pre style={{ fontSize: 12, whiteSpace: 'pre-wrap' }}>
-                    {JSON.stringify({ detail: result.detail, debug: result.debug }, null, 2)}
-                  </pre>
-                </details>
-              )}
-
-              <div style={{ marginTop: 12 }}>
-                <div style={{ fontWeight: 700 }}>メルカリ用タイトル</div>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <span>{result.mercari_title || '【仮】カンテノ自動査定'}</span>
-                  <button type="button" onClick={() => copyText(result.mercari_title || '【仮】カンテノ自動査定')}>コピー</button>
-                </div>
-              </div>
-              <div style={{ marginTop: 12 }}>
-                <div style={{ fontWeight: 700 }}>メルカリ用説明文</div>
-                <textarea
-                  readOnly
-                  value={result.mercari_description || '一時的なエラーにより詳細を生成できませんでした。時間を空けて再度お試しください。'}
-                  style={{ width: '100%', height: 160 }}
-                />
-              </div>
-            </>
+      {res && !res.ok && (
+        <div style={{color:'#b91c1c'}}>
+          <p><b>Error:</b> {res.error || 'unknown'}</p>
+          <p style={{color:'#374151'}}>査定処理でエラーが発生しました。画像サイズまたは通信環境をご確認ください。</p>
+          {(res.detail || res.debug) && (
+            <details>
+              <summary>デバッグ詳細を開く</summary>
+              <pre style={{whiteSpace:'pre-wrap',fontSize:12,background:'#f9fafb',padding:8,borderRadius:6}}>
+                {JSON.stringify({ detail: res.detail, debug: res.debug }, null, 2)}
+              </pre>
+            </details>
           )}
         </div>
+      )}
+
+      {res && res.ok && (
+        <>
+          <h3>メルカリ用タイトル</h3>
+          <div>{res.mercari_title}</div>
+          <h3>メルカリ用説明文</h3>
+          <pre style={{whiteSpace:'pre-wrap'}}>{res.mercari_description}</pre>
+        </>
       )}
     </form>
   );
