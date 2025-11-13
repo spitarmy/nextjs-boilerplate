@@ -1,119 +1,92 @@
+// app/components/UploadForm.tsx
 'use client';
 
 import React, { useState } from 'react';
 
 type AssessResponse = {
   ok: boolean;
-  error?: string;
   output_text?: string;
   mercari_title?: string;
   mercari_body?: string;
+  error?: string;
 };
 
 export default function UploadForm() {
-  const [files, setFiles] = useState<File[]>([]);
-  const [previewUrls, setPreviewUrls] = useState<string[]>([]);
+  const [files, setFiles] = useState<FileList | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
 
-  // 画像選択
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files) return;
-    const arr = Array.from(e.target.files);
-
-    setFiles(arr);
-    setPreviewUrls(arr.map((f) => URL.createObjectURL(f)));
-  };
-
-  // DataURL に変換する helper
-  const fileToDataUrl = (file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        resolve(reader.result as string); // data:image/jpeg;base64,....
-      };
-      reader.onerror = () => reject(new Error('failed to read file'));
-      reader.readAsDataURL(file);
-    });
-  };
-
-  // 送信
-  const handleSubmit = async (e: React.FormEvent) => {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     setTitle('');
     setBody('');
 
-    if (files.length === 0) {
-      setError('画像を選択してください。');
+    if (!files || files.length === 0) {
+      setError('画像が選択されていません。');
       return;
     }
 
-    setLoading(true);
     try {
-      // ① ファイル→DataURL
-      const dataUrls = await Promise.all(files.map(fileToDataUrl));
+      setLoading(true);
 
-      // ② /api/assess に直接送る
+      // FileList → data URL の配列に変換
+      const dataUrls: string[] = await Promise.all(
+        Array.from(files).map(
+          (file) =>
+            new Promise<string>((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () => resolve(reader.result as string);
+              reader.onerror = (err) => reject(err);
+              reader.readAsDataURL(file);
+            })
+        )
+      );
+
       const res = await fetch('/api/assess', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ data_urls: dataUrls }),
+        body: JSON.stringify({ image_data_urls: dataUrls }),
       });
 
-      const json = (await res.json()) as AssessResponse;
+      const text = await res.text();
+      console.log('status', res.status);
+      console.log('raw', text);
 
-      if (!res.ok || !json.ok) {
-        setError(
-          json.error ||
-            '査定処理でエラーが発生しました。画像サイズまたは通信環境をご確認ください。'
-        );
+      let json: AssessResponse;
+      try {
+        json = JSON.parse(text);
+      } catch (e) {
+        setError('サーバーからの応答が不正でした。');
         return;
       }
 
-      setTitle(json.mercari_title || '【仮】カンテノ自動査定');
-      setBody(
-        json.mercari_body ||
-          json.output_text ||
-          '査定結果の取得に成功しました。'
-      );
-    } catch (e) {
+      if (!res.ok || !json.ok) {
+        setError(json.error ?? '査定に失敗しました。');
+        return;
+      }
+
+      setTitle(json.mercari_title ?? '');
+      setBody(json.mercari_body ?? json.output_text ?? '');
+    } catch (e: any) {
       console.error(e);
-      setError('予期しないエラーが発生しました。時間を空けて再度お試しください。');
+      setError('通信エラーが発生しました。');
     } finally {
       setLoading(false);
     }
-  };
+  }
 
   return (
-    <form onSubmit={handleSubmit} style={{ padding: 16 }}>
-      <div style={{ marginBottom: 12 }}>
+    <form onSubmit={handleSubmit}>
+      <div style={{ marginBottom: 8 }}>
         <input
           type="file"
-          accept="image/*"
           multiple
-          onChange={handleFileChange}
+          accept="image/*"
+          onChange={(e) => setFiles(e.target.files)}
         />
-      </div>
-
-      {/* プレビュー表示（1枚でも複数枚でもOK） */}
-      <div
-        style={{
-          display: 'flex',
-          gap: 8,
-          flexWrap: 'wrap',
-          marginBottom: 12,
-        }}
-      >
-        {previewUrls.map((url, i) => (
-          <img
-            key={i}
-            src={url}
-            style={{ maxWidth: 240, maxHeight: 240, objectFit: 'contain' }}
-          />
-        ))}
       </div>
 
       <button type="submit" disabled={loading}>
@@ -121,35 +94,20 @@ export default function UploadForm() {
       </button>
 
       {error && (
-        <p style={{ color: 'red', marginTop: 12 }}>
-          Error: {error}
+        <p style={{ color: 'red', marginTop: 16 }}>
+          {error}
         </p>
       )}
 
       <div style={{ marginTop: 24 }}>
-        <div style={{ marginBottom: 8 }}>
-          <strong>メルカリ用タイトル</strong>
-          <div>
-            <input
-              type="text"
-              value={title}
-              readOnly
-              style={{ width: '100%' }}
-            />
-          </div>
-        </div>
+        <h3>メルカリ用タイトル</h3>
+        <p>{title || '【仮】カンテノ自動査定'}</p>
 
-        <div>
-          <strong>メルカリ用説明文</strong>
-          <div>
-            <textarea
-              value={body}
-              readOnly
-              rows={8}
-              style={{ width: '100%' }}
-            />
-          </div>
-        </div>
+        <h3>メルカリ用説明文</h3>
+        <p>
+          {body ||
+            '一時的なエラーにより詳細を表示できませんでした。時計を変えて再度お試しください。'}
+        </p>
       </div>
     </form>
   );
