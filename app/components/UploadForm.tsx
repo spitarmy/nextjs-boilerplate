@@ -1,161 +1,153 @@
-"use client";
+'use client';
 
-import React, { useState } from "react";
+import React, { useState } from 'react';
 
 type AssessResponse = {
   ok: boolean;
+  error?: string;
   output_text?: string;
   mercari_title?: string;
-  mercari_description?: string;
-  error?: string;
+  mercari_body?: string;
 };
 
 export default function UploadForm() {
+  const [files, setFiles] = useState<File[]>([]);
   const [previewUrls, setPreviewUrls] = useState<string[]>([]);
-  const [status, setStatus] = useState("");
-  const [error, setError] = useState("");
-  const [mercariTitle, setMercariTitle] = useState("");
-  const [mercariDescription, setMercariDescription] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [title, setTitle] = useState('');
+  const [body, setBody] = useState('');
 
-  // 画像選択時：File → data URL(base64) に変換
-  const handleFilesSelected = async (
-    e: React.ChangeEvent<HTMLInputElement>
-  ) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) {
-      setPreviewUrls([]);
-      return;
-    }
+  // 画像選択
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files) return;
+    const arr = Array.from(e.target.files);
 
-    // 枚数はとりあえず最大3枚まで
-    const maxFiles = 3;
-    const selected = Array.from(files).slice(0, maxFiles);
-
-    const readAsDataUrl = (file: File) =>
-      new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = () => reject(reader.error);
-        reader.readAsDataURL(file); // ← ここで data:image/jpeg;base64,... 形式にする
-      });
-
-    try {
-      const dataUrls = await Promise.all(selected.map(readAsDataUrl));
-      setPreviewUrls(dataUrls);
-      setError("");
-    } catch (err) {
-      console.error(err);
-      setError("画像の読み込み中にエラーが発生しました。");
-    }
+    setFiles(arr);
+    setPreviewUrls(arr.map((f) => URL.createObjectURL(f)));
   };
 
-  // 「査定する」ボタン押下
+  // DataURL に変換する helper
+  const fileToDataUrl = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        resolve(reader.result as string); // data:image/jpeg;base64,....
+      };
+      reader.onerror = () => reject(new Error('failed to read file'));
+      reader.readAsDataURL(file);
+    });
+  };
+
+  // 送信
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setStatus("");
-    setError("");
+    setError(null);
+    setTitle('');
+    setBody('');
 
-    if (previewUrls.length === 0) {
-      setError("画像を選択してください。");
+    if (files.length === 0) {
+      setError('画像を選択してください。');
       return;
     }
 
+    setLoading(true);
     try {
-      const res = await fetch("/api/assess", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          image_urls: previewUrls, // data URL の配列をそのまま渡す
-        }),
+      // ① ファイル→DataURL
+      const dataUrls = await Promise.all(files.map(fileToDataUrl));
+
+      // ② /api/assess に直接送る
+      const res = await fetch('/api/assess', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data_urls: dataUrls }),
       });
 
-      const data: AssessResponse = await res.json();
+      const json = (await res.json()) as AssessResponse;
 
-      if (!res.ok || !data.ok) {
-        console.error("assess error", data);
-        setError(data.error ?? "査定処理中にエラーが発生しました。");
+      if (!res.ok || !json.ok) {
+        setError(
+          json.error ||
+            '査定処理でエラーが発生しました。画像サイズまたは通信環境をご確認ください。'
+        );
         return;
       }
 
-      setStatus("査定が完了しました。");
-
-      setMercariTitle(
-        data.mercari_title && data.mercari_title.trim() !== ""
-          ? data.mercari_title
-          : "【仮】カンテノ自動査定"
+      setTitle(json.mercari_title || '【仮】カンテノ自動査定');
+      setBody(
+        json.mercari_body ||
+          json.output_text ||
+          '査定結果の取得に成功しました。'
       );
-
-      setMercariDescription(
-        data.mercari_description && data.mercari_description.trim() !== ""
-          ? data.mercari_description
-          : data.output_text ?? ""
-      );
-    } catch (err) {
-      console.error(err);
-      setError("通信エラーが発生しました。時間をおいて再度お試しください。");
+    } catch (e) {
+      console.error(e);
+      setError('予期しないエラーが発生しました。時間を空けて再度お試しください。');
+    } finally {
+      setLoading(false);
     }
   };
 
   return (
     <form onSubmit={handleSubmit} style={{ padding: 16 }}>
-      {/* 画像選択 */}
-      <div>
+      <div style={{ marginBottom: 12 }}>
         <input
           type="file"
           accept="image/*"
           multiple
-          onChange={handleFilesSelected}
+          onChange={handleFileChange}
         />
       </div>
 
-      {/* プレビュー */}
-      <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
-        {previewUrls.map((url, idx) => (
+      {/* プレビュー表示（1枚でも複数枚でもOK） */}
+      <div
+        style={{
+          display: 'flex',
+          gap: 8,
+          flexWrap: 'wrap',
+          marginBottom: 12,
+        }}
+      >
+        {previewUrls.map((url, i) => (
           <img
-            key={idx}
+            key={i}
             src={url}
-            alt={`preview-${idx}`}
-            style={{
-              maxWidth: 240,
-              maxHeight: 240,
-              objectFit: "contain",
-              border: "1px solid #ddd",
-            }}
+            style={{ maxWidth: 240, maxHeight: 240, objectFit: 'contain' }}
           />
         ))}
       </div>
 
-      {/* ボタン */}
-      <div style={{ marginTop: 16 }}>
-        <button type="submit">査定する</button>
-      </div>
+      <button type="submit" disabled={loading}>
+        {loading ? '査定中…' : '査定する'}
+      </button>
 
-      {/* ステータス／エラー表示 */}
-      {status && (
-        <p style={{ color: "green", marginTop: 8 }}>
-          {status}
-        </p>
-      )}
       {error && (
-        <p style={{ color: "red", marginTop: 8 }}>
+        <p style={{ color: 'red', marginTop: 12 }}>
           Error: {error}
         </p>
       )}
 
-      {/* メルカリ用 出力 */}
       <div style={{ marginTop: 24 }}>
-        <div style={{ marginBottom: 12 }}>
+        <div style={{ marginBottom: 8 }}>
           <strong>メルカリ用タイトル</strong>
           <div>
-            {mercariTitle || "【仮】カンテノ自動査定"}
+            <input
+              type="text"
+              value={title}
+              readOnly
+              style={{ width: '100%' }}
+            />
           </div>
         </div>
 
         <div>
           <strong>メルカリ用説明文</strong>
-          <div style={{ whiteSpace: "pre-wrap" }}>
-            {mercariDescription ||
-              "一時的なエラーにより査定結果を表示できませんでした。時間をおいて再度お試しください。"}
+          <div>
+            <textarea
+              value={body}
+              readOnly
+              rows={8}
+              style={{ width: '100%' }}
+            />
           </div>
         </div>
       </div>
