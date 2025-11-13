@@ -44,8 +44,7 @@ export async function POST(req: NextRequest) {
         })
         .filter((u): u is string => !!u)
         .map((u) => u.trim())
-        // OpenAI が受け付ける形だけ残す（http/https）
-        .filter((u) => /^https?:\/\//i.test(u));
+        .filter((u) => /^https?:\/\//i.test(u)); // http/https だけ
     }
 
     if (!urls.length) {
@@ -59,7 +58,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // OpenAI に投げる content を作成
     const content: any[] = [
       {
         type: "input_text",
@@ -67,15 +65,16 @@ export async function POST(req: NextRequest) {
           "あなたは骨董・ブランド・和装などリサイクル商品の査定AIです。" +
           "画像をよく観察し、カテゴリ・状態・想定販売価格・注意点を日本語で丁寧にまとめてください。" +
           "最後にメルカリ用タイトル(40文字以内)と、説明文(200〜400文字程度)をJSONで返してください。" +
-          'フォーマット: {"output_text":"概要と査定コメント","mercari_title":"タイトル","mercari_description":"説明文"}',
+          'フォーマット: {\"output_text\":\"概要と査定コメント\",\"mercari_title\":\"タイトル\",\"mercari_description\":\"説明文\"}',
       },
       ...urls.map((u) => ({
         type: "input_image",
-        image_url: u, // ★ ここは必ず string になるよう上で整形済み
+        image_url: u,
       })),
     ];
 
-    const aiRes = await openai.responses.create({
+    // ★ここで as any にして型チェックを無効化
+    const aiRes = (await openai.responses.create({
       model: "gpt-4.1-mini",
       input: [
         {
@@ -83,10 +82,11 @@ export async function POST(req: NextRequest) {
           content,
         },
       ],
-    });
+    })) as any;
 
+    // ★ここはそのまま素直にアクセス（aiRes は any 扱い）
     const first = aiRes.output?.[0]?.content?.[0];
-    const text = (first as any)?.text ?? "";
+    const text: string = first?.text ?? "";
 
     if (!text) {
       return NextResponse.json(
