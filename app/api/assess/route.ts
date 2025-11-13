@@ -1,5 +1,5 @@
 // app/api/assess/route.ts
-// @ts-nocheck  ← TypeScriptの型エラーを気にしないようにする
+// @ts-nocheck
 
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
@@ -17,6 +17,8 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json().catch(() => null);
+
+    // フロントから image_urls: string[] が来る想定（1枚のときは image_url でもOK）
     const imageUrls: string[] =
       body?.image_urls ??
       (body?.image_url ? [body.image_url] : []);
@@ -30,58 +32,59 @@ export async function POST(req: NextRequest) {
 
     const client = new OpenAI({ apiKey });
 
-    // 🔸 OpenAI Responses API に送る入力
-    const input = [
-      {
-        role: "user",
-        content: [
-          {
-            type: "input_text",
-            text:
-              "あなたは質屋『リサイくん』の査定担当AIです。" +
-              "送られた写真をもとに、ブランド品・骨董・雑貨などを査定し、" +
-              "メルカリ出品用のタイトルと説明文を日本語で作成してください。" +
-              "必ず次のJSON形式だけを返してください：" +
-              `{"output_text":"査定の要約","mercari_title":"40字以内のタイトル","mercari_description":"メルカリ出品説明文"}`,
-          },
-          // ここで画像を全部つなぐ
-          ...imageUrls.map((url) => ({
-            type: "input_image",
-            image_url: { url }, // ← ここがポイント。「文字列」じゃなくて { url: string }
-          })),
-        ],
-      },
-    ];
-
     const response: any = await client.responses.create({
       model: "gpt-4.1-mini",
-      input,
+      input: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text:
+                "あなたは質屋『リサイくん』の査定担当AIです。" +
+                "送られた写真をもとに、ブランド品・骨董・雑貨などを査定し、" +
+                "メルカリ出品用のタイトルと説明文を日本語で作成してください。" +
+                "必ず次のJSON形式だけを返してください：" +
+                `{"output_text":"査定の要約","mercari_title":"40字以内のタイトル","mercari_description":"メルカリ出品説明文"}`,
+            },
+            // 🔴 ここがポイント：image_url は「そのまま文字列」で渡す
+            ...imageUrls.map((url: string) => ({
+              type: "input_image",
+              image_url: url, // ← 文字列！ { url } ではない！
+            })),
+          ],
+        },
+      ],
       max_output_tokens: 1024,
     });
 
-    // 🔸 OpenAI からの返り値からテキストを取り出す
+    // --- 返ってきたテキストを取り出す ---
     let outputText = "";
-    const first = response.output?.[0];
-    if (first?.type === "message") {
-      const textPart = first.message.content.find(
-        (c: any) => c.type === "output_text"
-      );
-      outputText = textPart?.text ?? "";
+
+    try {
+      const first = response.output?.[0];
+      const firstContent = first?.content?.[0];
+
+      if (
+        firstContent &&
+        (firstContent.type === "output_text" || firstContent.type === "text")
+      ) {
+        outputText = firstContent.text;
+      }
+    } catch (e) {
+      console.log("parse output error:", e);
     }
 
     if (!outputText) {
-      return NextResponse.json(
-        { ok: false, error: "AI からテキストが返ってきませんでした。" },
-        { status: 500 }
-      );
+      // 取れなかった場合はデバッグ用に全部JSON化
+      outputText = JSON.stringify(response);
     }
 
-    // 🔸 モデルから返ってきたJSON文字列をパース
+    // --- モデルからのJSONをパース ---
     let parsed: any = {};
     try {
       parsed = JSON.parse(outputText);
     } catch {
-      // JSONじゃなかった場合でも一応生テキストは返す
       parsed = {};
     }
 
