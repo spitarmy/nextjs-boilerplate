@@ -1,44 +1,63 @@
 // app/api/upload-url/route.ts
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
 
-export const runtime = "nodejs";
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
-// 画像アップロード用のダミーURLを返すエンドポイント
-// ※今はまずエラーを消すために、「ちゃんとした https://... の文字列」を返すだけにしています。
-//   後で本番用のストレージ連携（Supabase や Vercel Blob 等）に差し替え可能です。
+// サーバー側用の Supabase クライアント（サービスロールキー）
+const supabase = createClient(supabaseUrl, serviceKey);
+
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+
+// POST /api/upload-url
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json().catch(() => ({} as any));
-    const filename = body?.filename as string | undefined;
+    const body = await req.json().catch(() => null);
+    const filename = body?.filename;
 
-    if (!filename || typeof filename !== "string") {
+    if (!filename || typeof filename !== 'string') {
       return NextResponse.json(
-        { ok: false, error: "filename が送られてきていません。" },
+        { ok: false, message: 'filename が指定されていません。' },
         { status: 400 }
       );
     }
 
-    // ファイル名から seed を作って、毎回同じダミー画像 URL を返す
-    const seed =
-      filename.replace(/\.[^.]+$/, "") || "risai-upload-placeholder";
-    const url = `https://picsum.photos/seed/${encodeURIComponent(
-      seed
-    )}/512`;
+    const bucket = 'uploads';                    // ← バケット名
+    const path = `mobile/${Date.now()}-${filename}`; // ← mobile フォルダ配下に保存
 
-    return NextResponse.json(
-      {
-        ok: true,
-        url, // ← フロント側はこの url を image_urls に詰める
-      },
-      { status: 200 }
-    );
+    // 署名付きアップロード URL を発行
+    const { data, error } = await supabase
+      .storage
+      .from(bucket)
+      .createSignedUploadUrl(path);
+
+    if (error || !data) {
+      console.error('createSignedUploadUrl error', error);
+      return NextResponse.json(
+        { ok: false, message: '署名付き URL の発行に失敗しました。' },
+        { status: 500 }
+      );
+    }
+
+    // 公開アクセス用 URL（public バケット前提）
+    const publicUrl =
+      supabaseUrl.replace(/\/$/, '') +
+      `/storage/v1/object/public/${bucket}/${path}`;
+
+    return NextResponse.json({
+      ok: true,
+      bucket,
+      path,
+      token: data.token,
+      signedUrl: data.signedUrl,
+      publicUrl,
+    });
   } catch (e: any) {
-    console.error("upload-url error", e);
+    console.error('upload-url route error', e);
     return NextResponse.json(
-      {
-        ok: false,
-        error: e?.message ?? "upload-url で予期せぬエラーが発生しました。",
-      },
+      { ok: false, message: e?.message || 'サーバーエラー' },
       { status: 500 }
     );
   }
