@@ -1,133 +1,164 @@
-// /app/components/UploadForm.tsx
-'use client';
+"use client";
 
-import React, { useState } from 'react';
-import { createClient } from '@supabase/supabase-js';
+import React, { useState } from "react";
 
-type AssessRes = {
+type AssessResponse = {
   ok: boolean;
-  error?: string;
   output_text?: string;
   mercari_title?: string;
   mercari_description?: string;
+  error?: string;
 };
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
-
 export default function UploadForm() {
-  const [files, setFiles] = useState<File[]>([]);
-  const [preview, setPreview] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<AssessRes | null>(null);
+  const [previewUrls, setPreviewUrls] = useState<string[]>([]);
+  const [status, setStatus] = useState("");
+  const [error, setError] = useState("");
+  const [mercariTitle, setMercariTitle] = useState("");
+  const [mercariDescription, setMercariDescription] = useState("");
 
-  function onPick(e: React.ChangeEvent<HTMLInputElement>) {
-    const flist = Array.from(e.target.files || []);
-    setFiles(flist);
-    setPreview(flist[0] ? URL.createObjectURL(flist[0]) : null);
-    setResult(null);
-  }
+  // 画像選択時：File → data URL(base64) に変換
+  const handleFilesSelected = async (
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) {
+      setPreviewUrls([]);
+      return;
+    }
 
-  async function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!files.length || loading) return;
+    // 枚数はとりあえず最大3枚まで
+    const maxFiles = 3;
+    const selected = Array.from(files).slice(0, maxFiles);
 
-    setLoading(true);
-    setResult(null);
+    const readAsDataUrl = (file: File) =>
+      new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(file); // ← ここで data:image/jpeg;base64,... 形式にする
+      });
 
     try {
-      // 1) Supabaseへアップロード（公開URLを取得）
-      const urls: string[] = [];
-      for (const f of files) {
-        const ext = (f.name.split('.').pop() || 'jpg').toLowerCase();
-        const path = `mobile/${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
-        const { error } = await supabase.storage.from('uploads').upload(path, f, {
-          contentType: f.type || 'image/jpeg',
-          upsert: false,
-        });
-        if (error) throw new Error('アップロード失敗: ' + error.message);
-
-        const { data } = supabase.storage.from('uploads').getPublicUrl(path);
-        if (!data?.publicUrl) throw new Error('公開URL取得エラー');
-        urls.push(data.publicUrl);
-      }
-
-      // 2) 査定APIへ
-      const res = await fetch('/api/assess', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image_urls: urls }),
-      });
-
-      const json = (await res.json()) as AssessRes & { detail?: any; debug?: any };
-      setResult(json);
-
-      // 画面に分かりやすく出す（ネットワークタブが苦手でもOK）
-      if (!json.ok) {
-        console.log('[assess error detail]', json.detail ?? json);
-      }
-    } catch (e: any) {
-      setResult({
-        ok: false,
-        error:
-          e?.message ||
-          '通信エラー',
-        output_text:
-          '査定処理でエラーが発生しました。画像サイズまたは通信環境をご確認ください。',
-        mercari_title: '【仮】カンテノ自動査定',
-        mercari_description:
-          '一時的なエラーにより詳細を生成できませんでした。時間を空けて再度お試しください。',
-      });
-    } finally {
-      setLoading(false);
+      const dataUrls = await Promise.all(selected.map(readAsDataUrl));
+      setPreviewUrls(dataUrls);
+      setError("");
+    } catch (err) {
+      console.error(err);
+      setError("画像の読み込み中にエラーが発生しました。");
     }
-  }
+  };
+
+  // 「査定する」ボタン押下
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setStatus("");
+    setError("");
+
+    if (previewUrls.length === 0) {
+      setError("画像を選択してください。");
+      return;
+    }
+
+    try {
+      const res = await fetch("/api/assess", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          image_urls: previewUrls, // data URL の配列をそのまま渡す
+        }),
+      });
+
+      const data: AssessResponse = await res.json();
+
+      if (!res.ok || !data.ok) {
+        console.error("assess error", data);
+        setError(data.error ?? "査定処理中にエラーが発生しました。");
+        return;
+      }
+
+      setStatus("査定が完了しました。");
+
+      setMercariTitle(
+        data.mercari_title && data.mercari_title.trim() !== ""
+          ? data.mercari_title
+          : "【仮】カンテノ自動査定"
+      );
+
+      setMercariDescription(
+        data.mercari_description && data.mercari_description.trim() !== ""
+          ? data.mercari_description
+          : data.output_text ?? ""
+      );
+    } catch (err) {
+      console.error(err);
+      setError("通信エラーが発生しました。時間をおいて再度お試しください。");
+    }
+  };
 
   return (
-    <form onSubmit={onSubmit} style={{ display: 'grid', gap: 12 }}>
-      <input type="file" accept="image/*" multiple onChange={onPick} />
-      {preview && (
-        <img src={preview} alt="preview" style={{ maxWidth: 320, borderRadius: 6 }} />
-      )}
-      <button type="submit" disabled={loading || files.length === 0}>
-        {loading ? '査定中…' : '査定する'}
-      </button>
+    <form onSubmit={handleSubmit} style={{ padding: 16 }}>
+      {/* 画像選択 */}
+      <div>
+        <input
+          type="file"
+          accept="image/*"
+          multiple
+          onChange={handleFilesSelected}
+        />
+      </div>
 
-      {/* 結果表示 */}
-      {result && (
-        <div style={{ marginTop: 8 }}>
-          {result.ok ? (
-            <>
-              <pre style={{ whiteSpace: 'pre-wrap' }}>{result.output_text}</pre>
-              <div style={{ marginTop: 8 }}>
-                <div style={{ fontWeight: 600 }}>メルカリ用タイトル</div>
-                <div>{result.mercari_title}</div>
-                <div style={{ fontWeight: 600, marginTop: 6 }}>メルカリ用説明文</div>
-                <div style={{ whiteSpace: 'pre-wrap' }}>{result.mercari_description}</div>
-              </div>
-            </>
-          ) : (
-            <>
-              <div style={{ color: '#b91c1c', marginBottom: 6 }}>
-                Error: {result.error || '不明なエラー'}
-              </div>
-              <div style={{ color: '#374151' }}>
-                査定処理でエラーが発生しました。画像サイズまたは通信環境をご確認ください。
-              </div>
-              <div style={{ marginTop: 8, opacity: 0.8 }}>
-                <div style={{ fontWeight: 600 }}>メルカリ用タイトル</div>
-                <div>{result.mercari_title}</div>
-                <div style={{ fontWeight: 600, marginTop: 6 }}>メルカリ用説明文</div>
-                <div style={{ whiteSpace: 'pre-wrap' }}>
-                  {result.mercari_description}
-                </div>
-              </div>
-            </>
-          )}
-        </div>
+      {/* プレビュー */}
+      <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
+        {previewUrls.map((url, idx) => (
+          <img
+            key={idx}
+            src={url}
+            alt={`preview-${idx}`}
+            style={{
+              maxWidth: 240,
+              maxHeight: 240,
+              objectFit: "contain",
+              border: "1px solid #ddd",
+            }}
+          />
+        ))}
+      </div>
+
+      {/* ボタン */}
+      <div style={{ marginTop: 16 }}>
+        <button type="submit">査定する</button>
+      </div>
+
+      {/* ステータス／エラー表示 */}
+      {status && (
+        <p style={{ color: "green", marginTop: 8 }}>
+          {status}
+        </p>
       )}
+      {error && (
+        <p style={{ color: "red", marginTop: 8 }}>
+          Error: {error}
+        </p>
+      )}
+
+      {/* メルカリ用 出力 */}
+      <div style={{ marginTop: 24 }}>
+        <div style={{ marginBottom: 12 }}>
+          <strong>メルカリ用タイトル</strong>
+          <div>
+            {mercariTitle || "【仮】カンテノ自動査定"}
+          </div>
+        </div>
+
+        <div>
+          <strong>メルカリ用説明文</strong>
+          <div style={{ whiteSpace: "pre-wrap" }}>
+            {mercariDescription ||
+              "一時的なエラーにより査定結果を表示できませんでした。時間をおいて再度お試しください。"}
+          </div>
+        </div>
+      </div>
     </form>
   );
 }
