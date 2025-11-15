@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
     // 保存先パスを決める（バケット内のフォルダ＋ランダム名）
     const safeName = filename.replace(/[^\w.-]+/g, '_');
     const objectPath =
-      `uploads/${Date.now()}-${Math.random().toString(36).slice(2)}-${safeName}`;
+      `risai-images/${Date.now()}-${Math.random().toString(36).slice(2)}-${safeName}`;
 
     // 署名付きアップロードURLを発行
     const { data, error } = await (supabase as any)
