@@ -9,6 +9,7 @@ const openai = new OpenAI({
 // POST /api/assess
 export async function POST(req: NextRequest) {
   try {
+    // APIキー確認
     if (!process.env.OPENAI_API_KEY) {
       console.error("OPENAI_API_KEY is missing");
       return NextResponse.json(
@@ -17,6 +18,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // リクエストボディの取得
     const body = await req.json().catch(() => null);
     if (!body) {
       return NextResponse.json(
@@ -43,8 +45,11 @@ export async function POST(req: NextRequest) {
           return null;
         })
         .filter((u): u is string => !!u)
-        .map((u) => u.trim())
-        .filter((u) => /^https?:\/\//i.test(u)); // http/https だけ
+        .map((u) => u.trim());
+      // ★ data:image/～ のような data URL もそのまま通すため、
+      //    ここで http/https 限定フィルタはかけません
+    } else if (typeof raw === "string") {
+      urls = [raw.trim()];
     }
 
     if (!urls.length) {
@@ -52,12 +57,13 @@ export async function POST(req: NextRequest) {
         {
           ok: false,
           error:
-            "有効な画像URLがサーバーに届きませんでした。アップロード処理かネットワークを確認してください。",
+            "有効な画像データがサーバーに届きませんでした。アップロード処理かネットワークを確認してください。",
         },
         { status: 400 }
       );
     }
 
+    // OpenAI に投げる content を組み立て
     const content: any[] = [
       {
         type: "input_text",
@@ -69,11 +75,11 @@ export async function POST(req: NextRequest) {
       },
       ...urls.map((u) => ({
         type: "input_image",
-        image_url: u,
+        image_url: u, // data URL でも https URL でもOK
       })),
     ];
 
-    // ★ここで as any にして型チェックを無効化
+    // OpenAI 呼び出し（型は any 扱いにして素直に読む）
     const aiRes = (await openai.responses.create({
       model: "gpt-4.1-mini",
       input: [
@@ -84,7 +90,6 @@ export async function POST(req: NextRequest) {
       ],
     })) as any;
 
-    // ★ここはそのまま素直にアクセス（aiRes は any 扱い）
     const first = aiRes.output?.[0]?.content?.[0];
     const text: string = first?.text ?? "";
 
