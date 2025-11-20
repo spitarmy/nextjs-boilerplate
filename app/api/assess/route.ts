@@ -276,36 +276,43 @@ export async function POST(req: NextRequest) {
       .join("\n\n");
 
     // ---------- 4-4. 最終査定用の AI 呼び出し ----------
-    const content: any[] = [
-      {
-        type: "input_text",
-        text:
-          "あなたは「リサイくん構想」のカンテノAIです。" +
-          "以下の3つを必ず行ってください。\n" +
-          "1) 画像とブランド真贋リファレンスを見て、カテゴリ・状態・真贋の可能性・注意点を日本語で詳細にコメントする\n" +
-          "2) メルカリ・ヤフオクなどフリマサイトの相場感で、販売想定価格帯を提案する（高くなりすぎないよう控えめに）\n" +
-          "   - brand_data_reference.mercari_price_range_jpy を基準にしつつ、状態が悪ければ下振れ、非常に良ければ少し上振れの感覚\n" +
-          "3) マニュアル（writing_guidelines）に沿って、メルカリ用タイトルと説明文を作成する\n\n" +
-          "重要:\n" +
-          "- 真贋はあくまで「画像ベースでの推定」であり、『断定』はしないでください。\n" +
-          "- フリマ相場より明らかに高くなりすぎないようにしてください。\n" +
-          "- 説明文には、状態・サイズ感・付属品・注意事項・検索用ワードを適度に含めてください。\n" +
-          "出力は必ず JSON 形式のみで返してください。\n" +
-          'フォーマット: {"output_text": "...査定コメント...", "mercari_title": "...40文字以内タイトル...", "mercari_description": "...300〜600文字程度の説明文..."}\n\n" +
-          "ブランド推定結果と参考データ、マニュアルは以下です。\n\n" +
-          `【ブランド推定結果】\n${JSON.stringify(brandInfo, null, 2)}\n\n` +
-          `【ブランド真贋リファレンス（一部）】\n${JSON.stringify(
-            brandRefSummary,
-            null,
-            2
-          )}\n\n` +
-          `【出品マニュアル（writing_guidelines 抜粋）】\n${guidelineText}\n`,
-      },
-      ...urls.map((u) => ({
-        type: "input_image",
-        image_url: u,
-      })),
-    ];
+const instruction = `
+あなたは「リサイくん構想」のカンテノAIです。以下の3つを必ず行ってください。
+1) 画像とブランド真贋リファレンスを見て、カテゴリ・状態・真贋の可能性・注意点を日本語で詳細にコメントする。
+2) メルカリ・ヤフオクなどフリマサイトの相場感で、販売想定価格帯を提案する（高くなりすぎないよう控えめに）。brand_data_reference.mercari_price_range_jpy を基準にしつつ、状態が悪ければ下振れ、非常に良ければ少し上振れの感覚で。
+3) マニュアル（writing_guidelines）に沿って、メルカリ用タイトルと説明文を作成する。
+
+重要:
+- 真贋はあくまで「画像ベースでの推定」であり、「断定」はしないこと。
+- フリマ相場より明らかに高くなりすぎないようにすること。
+- 説明文には、状態・サイズ感・付属品・注意事項・検索用ワードを適度に含めること。
+
+出力は必ず JSON 形式のみで返してください。
+フォーマット: {"output_text":"...査定コメント...","mercari_title":"...40文字以内タイトル...","mercari_description":"...300〜600文字程度の説明文..."}
+
+ブランド推定結果と参考データ、マニュアルは以下です。
+
+【ブランド推定結果】
+${JSON.stringify(brandInfo, null, 2)}
+
+【ブランド真贋リファレンス（一部）】
+${JSON.stringify(brandRefSummary, null, 2)}
+
+【出品マニュアル（writing_guidelines 抜粋）】
+${guidelineText}
+`.trim();
+
+const content: any[] = [
+  {
+    type: "input_text",
+    text: instruction,
+  },
+  ...urls.map((u) => ({
+    type: "input_image",
+    image_url: u,
+  })),
+];
+
 
     const aiRes = (await openai.responses.create({
       model: "gpt-4.1-mini",
