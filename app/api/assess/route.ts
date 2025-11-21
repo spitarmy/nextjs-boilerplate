@@ -7,189 +7,32 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// Supabase（サービスロール）設定
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-
+// Supabase クライアント（サービスロールキー）
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const supabase =
   SUPABASE_URL && SERVICE_KEY
     ? createClient(SUPABASE_URL, SERVICE_KEY)
     : null;
 
-// ---------- 型定義 ----------
-type BrandRef = {
-  id?: number;
-  brand: string;
-  model_or_line: string;
-  category: string;
-  release_year_range: string;
-  material: string;
-  serial_style: string;
-  stitch_rules: string;
-  logo_rules: string;
-  font_rules: string;
-  stamp_rules: string;
-  hardware_rules: string;
-  lining_rules: string;
-  common_fake_signs: string;
-  quality_markers: string;
-  mercari_price_range_jpy: string;
-  notes: string;
-  example_images: string;
-};
+// 出品マニュアルのざっくり要約（RAGの代わりの簡易版）
+const LISTING_GUIDELINE = `
+・タイトルは「ブランド名＋カテゴリー＋特徴＋状態」を簡潔に（40文字以内）。
+・説明文の前半で「カテゴリ／ブランド／型名／サイズ感／カラー」を整理して書く。
+・状態説明は「外観」「内側」「金具」「角」「持ち手」「ニオイ」を分けて具体的に。
+・ダメージは必ず正直に：キズ・汚れ・色ヤケ・ベタつき・ほつれなどは位置と程度を書く。
+・付属品（箱・保存袋・ギャランティ・ストラップなど）は有無を一覧で書く。
+・相場はメルカリ／ヤフオクなどフリマ実売価格を基準に、少しだけ強気〜普通くらい。
+・偽物の可能性が少しでもあれば「真贋は保証できません／画像でご確認ください」と明記する。
+・最後に「中古品にご理解ある方のみ」「トラブル防止のため返品不可」などの注意書きを入れる。
+`.trim();
 
-type WritingGuideline = {
-  id: number;
-  section: string;
-  platform: string;
-  content: string;
-  priority: number | null;
-};
-
-type AssessResponse = {
-  ok: boolean;
-  error?: string;
-  output_text?: string;
-  mercari_title?: string;
-  mercari_description?: string;
-};
-
-// ---------- 1. 画像からブランド・カテゴリを推定 ----------
-async function detectBrandAndCategory(
-  imageUrls: string[]
-): Promise<{
-  brand: string | null;
-  category: string | null;
-  guessed_model: string | null;
-}> {
-  try {
-    const content: any[] = [
-      {
-        type: "input_text",
-        text:
-          "あなたはブランド品・ファッションアイテムの分類AIです。" +
-          "与えられた画像から、以下の3項目を日本語ではなく英語で簡潔にJSONで返してください。" +
-          'フォーマット: {"brand": "LOUIS VUITTON など", "category": "bag / wallet / belt / sneakers など", "guessed_model": "分かる範囲でモデル名。分からなければ null"}' +
-          "ブランドが特定できない場合は brand を null にしてください。",
-      },
-      ...imageUrls.map((u) => ({
-        type: "input_image",
-        image_url: u,
-      })),
-    ];
-
-    const aiRes = (await openai.responses.create({
-      model: "gpt-4.1-mini",
-      input: [
-        {
-          role: "user",
-          content,
-        },
-      ],
-    })) as any;
-
-    const first = aiRes.output?.[0]?.content?.[0];
-    const text: string = first?.text ?? "";
-
-    if (!text) {
-      return { brand: null, category: null, guessed_model: null };
-    }
-
-    let parsed: any = null;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      return { brand: null, category: null, guessed_model: null };
-    }
-
-    return {
-      brand:
-        typeof parsed.brand === "string" && parsed.brand.trim()
-          ? parsed.brand.trim()
-          : null,
-      category:
-        typeof parsed.category === "string" && parsed.category.trim()
-          ? parsed.category.trim()
-          : null,
-      guessed_model:
-        typeof parsed.guessed_model === "string" && parsed.guessed_model.trim()
-          ? parsed.guessed_model.trim()
-          : null,
-    };
-  } catch (e) {
-    console.error("detectBrandAndCategory error", e);
-    return { brand: null, category: null, guessed_model: null };
-  }
-}
-
-// ---------- 2. ブランド真贋 RAG 用のリファレンス取得 ----------
-async function fetchBrandReferences(params: {
-  brand: string | null;
-  category: string | null;
-  limit?: number;
-}): Promise<BrandRef[]> {
-  if (!supabase) return [];
-
-  const { brand, category, limit = 10 } = params;
-
-  // brand が分からないときは何も返さない（安全寄り）
-  if (!brand) return [];
-
-  let query = supabase
-    .from("brand_data_reference")
-    .select("*")
-    .ilike("brand", `%${brand}%`)
-    .limit(limit);
-
-  if (category) {
-    // category も分かっていればゆるく絞る
-    query = query.ilike("category", `%${category}%`);
-  }
-
-  const { data, error } = await query;
-  if (error) {
-    console.error("fetchBrandReferences error", error);
-    return [];
-  }
-
-  return (data as BrandRef[]) ?? [];
-}
-
-// ---------- 3. 出品マニュアル RAG 用のガイドライン取得 ----------
-async function fetchWritingGuidelines(
-  platform: string = "mercari"
-): Promise<WritingGuideline[]> {
-  if (!supabase) return [];
-
-  const { data, error } = await supabase
-    .from("writing_guidelines")
-    .select("*")
-    .eq("platform", platform)
-    .order("priority", { ascending: true });
-
-  if (error) {
-    console.error("fetchWritingGuidelines error", error);
-    return [];
-  }
-
-  return (data as WritingGuideline[]) ?? [];
-}
-
-// ---------- 4. POST /api/assess ----------
 export async function POST(req: NextRequest) {
   try {
     if (!process.env.OPENAI_API_KEY) {
       console.error("OPENAI_API_KEY is missing");
       return NextResponse.json(
         { ok: false, error: "OPENAI_API_KEY が設定されていません。" },
-        { status: 500 }
-      );
-    }
-
-    if (!supabase) {
-      console.error("Supabase client not initialized");
-      return NextResponse.json(
-        { ok: false, error: "Supabase の設定に問題があります。" },
         { status: 500 }
       );
     }
@@ -204,127 +47,94 @@ export async function POST(req: NextRequest) {
 
     const raw = (body as any).image_urls;
 
-    // image_urls を安全に string[] にまとめる（dataURL / https URL 両対応）
-    let urls: string[] = [];
-
+    // フロントから来る data URL（"data:image/..."）前提で扱う
+    let imageInputs: string[] = [];
     if (Array.isArray(raw)) {
-      urls = raw
-        .map((v) => {
-          if (typeof v === "string") return v;
-          if (v && typeof v === "object") {
-            if (typeof (v as any).url === "string") return (v as any).url;
-            if (typeof (v as any).image_url === "string")
-              return (v as any).image_url;
-            if (typeof (v as any).src === "string") return (v as any).src;
-          }
-          return null;
-        })
-        .filter((u): u is string => !!u)
-        .map((u) => u.trim());
+      imageInputs = raw.filter(
+        (v: any): v is string =>
+          typeof v === "string" && v.startsWith("data:image")
+      );
     }
 
-    if (!urls.length) {
+    if (!imageInputs.length) {
       return NextResponse.json(
         {
           ok: false,
           error:
-            "有効な画像データがサーバーに届きませんでした。アップロード処理かネットワークを確認してください。",
+            "有効な画像データがサーバーに届きませんでした。画像の選択やネットワークを確認してください。",
         },
         { status: 400 }
       );
     }
 
-    // ---------- 4-1. 画像からブランド・カテゴリを推定 ----------
-    const brandInfo = await detectBrandAndCategory(urls);
-    console.log("brandInfo:", brandInfo);
+    // ここで Supabase からブランド相場RAGを取得（まずは Louis Vuitton 固定）
+    let lvMarketRows: any[] = [];
+    if (supabase) {
+      const { data, error } = await supabase
+        .from("brand_data_reference_v2")
+        .select(
+          "brand,line_name,model_name,category,subcategory,condition_hint,mercari_price_low,mercari_price_high,notes"
+        )
+        .eq("brand", "Louis Vuitton")
+        .limit(100);
 
-    // ---------- 4-2. ブランド真贋 RAG 用リファレンス取得 ----------
-    const brandRefs = await fetchBrandReferences({
-      brand: brandInfo.brand,
-      category: brandInfo.category,
-      limit: 8,
-    });
+      if (error) {
+        console.error("Supabase brand_data_reference_v2 error", error);
+      } else if (data) {
+        lvMarketRows = data;
+      }
+    } else {
+      console.warn("Supabase client not initialized for assess route.");
+    }
 
-    // ---------- 4-3. 出品マニュアル RAG 用ガイドライン取得 ----------
-    const guidelines = await fetchWritingGuidelines("mercari");
+    const lvMarketJson = JSON.stringify(lvMarketRows);
 
-    // AI に渡すための参考データをテキスト化
-    const brandRefSummary = brandRefs.map((r, idx) => ({
-      index: idx,
-      brand: r.brand,
-      model_or_line: r.model_or_line,
-      category: r.category,
-      material: r.material,
-      serial_style: r.serial_style,
-      stitch_rules: r.stitch_rules,
-      logo_rules: r.logo_rules,
-      font_rules: r.font_rules,
-      stamp_rules: r.stamp_rules,
-      hardware_rules: r.hardware_rules,
-      lining_rules: r.lining_rules,
-      common_fake_signs: r.common_fake_signs,
-      quality_markers: r.quality_markers,
-      mercari_price_range_jpy: r.mercari_price_range_jpy,
-      notes: r.notes,
-    }));
+    // プロンプト本文（ブランドRAG + 出品マニュアル要約込み）
+    const userPrompt = `
+あなたは「リサイくん（カンテノ）」というリサイクル専門査定AIです。
+骨董／ブランド／和装／雑貨などの中古品を、フリマサイトの実売相場に合わせて査定します。
 
-    const guidelineText = guidelines
-      .map(
-        (g) =>
-          `[${g.section}] ${g.content}`
-      )
-      .join("\n\n");
+今回ユーザーは Louis Vuitton を含むブランド品の査定を希望している可能性があります。
 
-    // ---------- 4-4. 最終査定用の AI 呼び出し ----------
-const instruction = `
-あなたは「リサイくん構想」のカンテノAIです。以下の3つを必ず行ってください。
+【ブランド相場RAG（フリマ実売参考）】
+以下は Louis Vuitton のバッグ／小物について、
+メルカリ・ヤフオクなどフリマサイトの実売価格をもとに作成した相場データです。
+査定価格を決めるときは、このデータを「最優先」で参考にし、
+各行の "mercari_price_low"〜"mercari_price_high" のレンジから
+大きく外れない妥当な価格帯を提案してください。
 
-1) 画像とブランド真贋リファレンスを見て、カテゴリ・状態・真贋の可能性・注意点を日本語で詳細にコメントする。
-2) メルカリ・ヤフオクなど**フリマサイトの中古売却相場**を前提に、販売想定価格帯を提案する。
-   - 百貨店・専門店の販売価格や新品参考価格をベースにしてはいけません。
-   - brand_data_reference.mercari_price_range_jpy は「美品〜良品の目安レンジ」として使い、今回の個体が
-     ・使用感強め／ダメージ大 → そのレンジの30〜60%くらいまで思い切って下げる
-     ・普通の中古       → そのレンジの下限〜中間
-     ・かなり綺麗       → そのレンジの中間〜上限
-   - ただし、一般的な中古フリマ出品では 1点あたりの販売想定価格は **15万円以内** に収めてください。
-     （超レア・限定品として特別に高値を付けることは、このシステムでは行いません）
+${lvMarketJson}
 
-3) マニュアル（writing_guidelines）に沿って、メルカリ用タイトルと説明文を作成する。
+【出品マニュアル要約（文章のクセ）】
+${LISTING_GUIDELINE}
 
-重要:
-- 真贋はあくまで「画像ベースでの推定」であり、「断定」はしないこと。
-- 価格は常に「フリマで実際に売れそうな控えめ寄り」にすること。
-- 説明文には、状態・サイズ感・付属品・注意事項・検索用ワードを適度に含めること。
-- 価格コメントは
-  「一般的な相場感は◯◯〜◯◯円程度ですが、今回の状態を踏まえると出品価格は△△〜△△円前後を推奨します。」
-  のように、**相場感と実際に付けるべき価格帯を分けて書いてください。**
+【あなたのタスク】
+1. 画像をよく観察し、カテゴリ／ブランド／型の雰囲気／素材／おおよそのサイズ感／状態を日本語で説明する。
+2. 上記のブランド相場RAGを使って、フリマ実売相場と整合性のある「想定販売価格の目安（円）」を決める。
+   - 状態が良い：相場レンジの上〜中くらい
+   - 普通：相場レンジの真ん中
+   - 使用感が強い：相場レンジの下〜やや下に寄せる
+3. 注意点やリスク（色ヤケ・ベタつき・ニオイ・修理歴・真贋の不確実さなど）があれば必ずコメントする。
+4. メルカリ用タイトル（40文字以内）と、メルカリ用説明文（200〜400文字程度）を作成する。
+   説明文は出品マニュアル要約の方針に沿って書くこと。
 
-出力は必ず JSON 形式のみで返してください。
-フォーマット: {"output_text":"...査定コメント...","mercari_title":"...40文字以内タイトル...","mercari_description":"...300〜600文字程度の説明文..."}
+【出力フォーマット（重要）】
+必ず次の JSON 文字列「だけ」を返してください。余計な文章や説明は付けないこと。
 
-ブランド推定結果と参考データ、マニュアルは以下です。
+{"output_text":"概要と査定コメント（価格の根拠を含める）","mercari_title":"40文字以内タイトル","mercari_description":"メルカリ用説明文（200〜400文字程度）"}
 
-【ブランド推定結果】
-${JSON.stringify(brandInfo, null, 2)}
-
-【ブランド真贋リファレンス（一部）】
-${JSON.stringify(brandRefSummary, null, 2)}
-
-【出品マニュアル（writing_guidelines 抜粋）】
-${guidelineText}
 `.trim();
 
-const content: any[] = [
-  {
-    type: "input_text",
-    text: instruction,
-  },
-  ...urls.map((u) => ({
-    type: "input_image",
-    image_url: u,
-  })),
-];
-
+    const content: any[] = [
+      {
+        type: "input_text",
+        text: userPrompt,
+      },
+      ...imageInputs.map((u) => ({
+        type: "input_image",
+        image_url: u,
+      })),
+    ];
 
     const aiRes = (await openai.responses.create({
       model: "gpt-4.1-mini",
@@ -349,19 +159,18 @@ const content: any[] = [
       );
     }
 
-    // JSON パースを試みる
     let parsed: any = null;
     try {
       parsed = JSON.parse(text);
     } catch {
-      // パースできなかった場合でも、output_text だけ返す
+      // JSONにパースできなかった場合でも、とりあえず査定コメントは返す
       return NextResponse.json(
         {
           ok: true,
           output_text: text,
           mercari_title: "【仮】カンテノ自動査定",
           mercari_description:
-            "一時的なエラーにより詳細な整形はできませんでしたが、上記の査定コメントを参考にメルカリ出品文を調整してください。",
+            "一時的なエラーによりJSON形式の整形に失敗しましたが、上記の査定コメントを参考に出品文を作成してください。",
         },
         { status: 200 }
       );
