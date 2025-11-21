@@ -1,3 +1,4 @@
+// components/UploadForm.tsx
 'use client';
 
 import React, { useState } from 'react';
@@ -17,22 +18,7 @@ export default function UploadForm() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [result, setResult] = useState<AssessResponse | null>(null);
 
-  // File -> data URL (base64) に変換するヘルパー
-  function fileToDataUrl(file: File): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        if (typeof reader.result === 'string') {
-          resolve(reader.result); // "data:image/jpeg;base64,...."
-        } else {
-          reject(new Error('failed to read file'));
-        }
-      };
-      reader.onerror = () => reject(reader.error ?? new Error('file read error'));
-      reader.readAsDataURL(file);
-    });
-  }
-
+  // 画像を選択したとき
   function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
     const list = Array.from(e.target.files ?? []);
     setFiles(list);
@@ -47,6 +33,47 @@ export default function UploadForm() {
     }
   }
 
+  // 1ファイルを Supabase にアップロードして publicUrl を返す
+  async function uploadToSupabase(file: File): Promise<string> {
+    // ① まず /api/upload-url から signed URL をもらう
+    const urlRes = await fetch('/api/upload-url', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename: file.name }),
+    });
+
+    const urlJson = await urlRes.json();
+
+    if (!urlRes.ok || !urlJson.ok) {
+      throw new Error(urlJson.message ?? '署名付きURLの取得に失敗しました');
+    }
+
+    const uploadUrl: string = urlJson.uploadUrl;
+    const publicUrl: string = urlJson.publicUrl;
+
+    if (!uploadUrl || !publicUrl) {
+      throw new Error('uploadUrl または publicUrl が取得できませんでした');
+    }
+
+    // ② 署名付きURLに対して PUT で画像本体を送る
+    const putRes = await fetch(uploadUrl, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': file.type || 'application/octet-stream',
+        'x-upsert': 'true',
+      },
+      body: file,
+    });
+
+    if (!putRes.ok) {
+      throw new Error(`画像アップロードに失敗しました (status ${putRes.status})`);
+    }
+
+    // ③ /api/assess に渡すのは publicUrl
+    return publicUrl;
+  }
+
+  // 「査定する」ボタン押下
   async function onAssess() {
     try {
       setErrorMsg(null);
@@ -59,14 +86,16 @@ export default function UploadForm() {
 
       setLoading(true);
 
-      // ここで全部 base64(data URL) にする
-      const dataUrls = await Promise.all(files.map(fileToDataUrl));
+      // ★ ここが方法Bの心臓部：
+      // すべての画像を Supabase にアップロード → 公開URLの配列を取得
+      const imageUrls = await Promise.all(files.map(uploadToSupabase));
 
+      // その URL 配列を /api/assess に投げる
       const res = await fetch('/api/assess', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          image_urls: dataUrls, // ← /api/assess 側はここを読む
+          image_urls: imageUrls,
         }),
       });
 
@@ -80,7 +109,8 @@ export default function UploadForm() {
     } catch (err: any) {
       console.error(err);
       setErrorMsg(
-        err?.message ?? '査定処理でエラーが発生しました。時間をおいて再度お試しください。'
+        err?.message ??
+          '査定処理でエラーが発生しました。時間をおいて再度お試しください。'
       );
     } finally {
       setLoading(false);
