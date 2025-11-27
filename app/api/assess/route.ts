@@ -1,7 +1,7 @@
 // app/api/assess/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
-import { supabase } from "../../../lib/supabase"; // ★ パス注意：app/api/assess から lib へ
+import { supabase } from "../../../lib/supabase"; // ルート/lib/supabase.ts を参照
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,14 +12,16 @@ const openai = new OpenAI({
 
 // 共通プロンプト（JSON で返させる）
 const SYSTEM_PROMPT = [
-  "あなたは骨董・ブランド・和装・雑貨など幅広いジャンルの査定AIです。",
+  "あなたは骨董・ブランド・和装・雑貨・おもちゃ・時計・家電など、幅広いジャンルのリサイクル商品を扱う査定AIです。",
   "画像からブランド名・カテゴリ・型名・状態・特徴を精密に分析し、",
   "社内向けの査定コメント・真贋確度（confidence）・メルカリ向けの出品文を分離して生成してください。",
   "",
   "【厳守ルール】",
   "◆ 出力は必ず JSON 文字列のみ。",
-  "◆ JSON のキーは output_text / mercari_title / mercari_description / confidence の4つのみ。",
+  "◆ JSON のキーは output_text / mercari_title / mercari_description / confidence / genre / item_name の6つのみ。",
   "◆ confidence は 0〜100 の整数（%）で返す。",
+  "◆ genre は『ブランドバッグ』『時計』『骨董品』『おもちゃ』『家電』『雑貨』などの大まかなジャンル名を1つ返す。",
+  "◆ item_name は『シャネル マトラッセ チェーンショルダー』のような商品名・型名を短く1行で返す。",
   "",
   "【output_text（社内用）】",
   "・1〜5行のみ。",
@@ -32,7 +34,6 @@ const SYSTEM_PROMPT = [
   "【confidence（真贋信頼度）】",
   "・0〜100 の整数で返す。",
   "・画像などから判断した真贋の確からしさを数値化する。",
-  "・例：85 なら「85%」という意味。",
   "",
   "【mercari_title（40文字以内）】",
   "・ブランド名 + ライン/柄 + アイテム名 + 色/特徴 + 状態。",
@@ -50,7 +51,7 @@ const SYSTEM_PROMPT = [
   "",
   "【JSONフォーマット】",
   '必ず以下の形式の JSON 文字列のみを返す：',
-  '{"output_text":"社内用コメント","mercari_title":"タイトル","mercari_description":"説明文","confidence":90}'
+  '{"output_text":"社内用コメント","mercari_title":"タイトル","mercari_description":"説明文","confidence":90,"genre":"ジャンル","item_name":"商品名"}'
 ].join("\\n");
 
 export async function POST(req: NextRequest) {
@@ -91,7 +92,6 @@ export async function POST(req: NextRequest) {
         .filter((u): u is string => !!u && u.trim().length > 0);
     }
 
-    // data:〜 でも http(s):// でも OK にする
     if (!images.length) {
       return NextResponse.json(
         {
@@ -103,7 +103,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-       // ★★★ ジャンル別リファレンスを少し読む ★★★
+    // ＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊
+    // ジャンル別リファレンス＋過去 training_items を取得
+    // ＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊
     let referenceBlocks: string[] = [];
 
     try {
@@ -140,9 +142,7 @@ export async function POST(req: NextRequest) {
       } else if (jewelryRows && jewelryRows.length > 0) {
         const txt =
           "[ジュエリー系リファレンス]\n" +
-          jewelryRows
-            .map((row: any) => JSON.stringify(row))
-            .join("\n");
+          jewelryRows.map((row: any) => JSON.stringify(row)).join("\n");
         referenceBlocks.push(txt);
       }
 
@@ -157,8 +157,35 @@ export async function POST(req: NextRequest) {
       } else if (kinkoRows && kinkoRows.length > 0) {
         const txt =
           "[金工・漆器系リファレンス]\n" +
-          kinkoRows
-            .map((row: any) => JSON.stringify(row))
+          kinkoRows.map((row: any) => JSON.stringify(row)).join("\n");
+        referenceBlocks.push(txt);
+      }
+
+      // 4) 過去の training_items（教師データ）から直近のもの
+      const { data: trainingRows, error: trainingError } = await supabase
+        .from("training_items")
+        .select(
+          "genre,item_name,output_text,mercari_title,mercari_description,confidence"
+        )
+        .eq("is_trainable", true)
+        .order("created_at", { ascending: false })
+        .limit(50);
+
+      if (trainingError) {
+        console.error("training_items 取得エラー:", trainingError);
+      } else if (trainingRows && trainingRows.length > 0) {
+        const txt =
+          "[過去の教師データ（training_items）]\n" +
+          trainingRows
+            .map((row: any) => {
+              const g = row.genre ?? "";
+              const name = row.item_name ?? "";
+              const c =
+                typeof row.confidence === "number"
+                  ? `${row.confidence}%`
+                  : "N/A";
+              return `ジャンル:${g} / 商品:${name} / 信頼度:${c} / 概要:${row.output_text ?? ""}`;
+            })
             .join("\n");
         referenceBlocks.push(txt);
       }
@@ -168,7 +195,7 @@ export async function POST(req: NextRequest) {
 
     const referenceText = referenceBlocks.join("\n\n");
 
-    // OpenAI に渡す content を組み立てる
+    // OpenAI に渡す content を組み立てる（※ここでだけ content を定義）
     const content: any[] = [
       {
         type: "input_text",
@@ -180,7 +207,7 @@ export async function POST(req: NextRequest) {
               type: "input_text",
               text:
                 referenceText +
-                "\n---\n上記のリファレンスは「ブランドバッグ系」「ジュエリー系」「金工・漆器系」などジャンルごとに分かれています。画像から推定されるジャンルに最も近いブロックを主に参考にして査定してください。",
+                "\n---\n上記のリファレンスは「ブランドバッグ系」「ジュエリー系」「金工・漆器系」「過去の教師データ」などに分かれています。画像から推定されるジャンルに最も近い情報を主に参考にして査定してください。",
             },
           ]
         : []),
@@ -190,30 +217,9 @@ export async function POST(req: NextRequest) {
       })),
     ];
 
-    // OpenAI に渡す content を組み立てる
-    const content: any[] = [
-      {
-        type: "input_text",
-        text: SYSTEM_PROMPT,
-      },
-      // Supabase から読めたときだけ追加
-      ...(brandReferenceText
-        ? [
-            {
-              type: "input_text",
-              text:
-                brandReferenceText +
-                "\n---\n上記のブランドリファレンスも参考にしつつ、画像の商品を査定してください。",
-            },
-          ]
-        : []),
-      ...images.map((u) => ({
-        type: "input_image",
-        image_url: u,
-      })),
-    ];
-
+    // ＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊
     // OpenAI に査定を依頼
+    // ＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊
     const aiRes: any = await openai.responses.create({
       model: "gpt-4.1",
       temperature: 0.2,
@@ -238,7 +244,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // モデルからは JSON 文字列を返すよう指示しているので、パースを試みる
+    // JSON パース
     let parsed: any = null;
     try {
       parsed = JSON.parse(text);
@@ -270,8 +276,49 @@ export async function POST(req: NextRequest) {
     const confidence =
       typeof parsed.confidence === "number" ? parsed.confidence : null;
 
-    // （将来）confidence が十分高いときに training_items へ自動登録したければ、
-    // ここで supabase.from('training_items').insert(...) を書く
+    const genre =
+      typeof parsed.genre === "string" && parsed.genre.trim().length > 0
+        ? parsed.genre
+        : null;
+
+    const item_name =
+      typeof parsed.item_name === "string" && parsed.item_name.trim().length > 0
+        ? parsed.item_name
+        : null;
+
+    // ＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊
+    // confidence 90%以上を training_items に自動インサート
+    // ＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊
+    if (confidence !== null && confidence >= 90) {
+      try {
+        const { error: insertError } = await supabase
+          .from("training_items")
+          .insert([
+            {
+              genre,
+              item_name,
+              image_urls: images, // jsonb
+              output_text,
+              mercari_title,
+              mercari_description,
+              model: "gpt-4.1",
+              source: "kanteno-web",
+              confidence,
+              delta: null,
+              is_trainable: true,
+              created_by: null,
+              raw_request: { image_urls: images },
+              raw_response: aiRes,
+            },
+          ]);
+
+        if (insertError) {
+          console.error("training_items への自動登録に失敗:", insertError);
+        }
+      } catch (e) {
+        console.error("training_items 自動登録中の例外:", e);
+      }
+    }
 
     return NextResponse.json(
       {
@@ -280,6 +327,8 @@ export async function POST(req: NextRequest) {
         mercari_title,
         mercari_description,
         confidence,
+        genre,
+        item_name,
       },
       { status: 200 }
     );
