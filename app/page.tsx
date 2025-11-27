@@ -34,7 +34,6 @@ export default function Page() {
         <UploadForm />
 
         <script
-          // 画面読み込み時に /api/version を叩いてバッジに反映
           dangerouslySetInnerHTML={{
             __html: `
               (async function(){
