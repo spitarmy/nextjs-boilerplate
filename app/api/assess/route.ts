@@ -103,31 +103,92 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // ★★★ ここで Supabase からブランドリファレンスを少し読む ★★★
-    let brandReferenceText = "";
+       // ★★★ ジャンル別リファレンスを少し読む ★★★
+    let referenceBlocks: string[] = [];
+
     try {
+      // 1) ブランド・バッグ系
       const { data: brandRows, error: brandError } = await supabase
         .from("brand_data_reference_v2")
         .select("brand,line_name,model_name")
-        .limit(30); // とりあえず上から30件だけ
+        .limit(30);
 
       if (brandError) {
         console.error("brand_data_reference_v2 取得エラー:", brandError);
       } else if (brandRows && brandRows.length > 0) {
-        brandReferenceText =
-          "以下はブランドリファレンスデータの一部です。\n" +
+        const txt =
+          "[ブランドバッグ系リファレンス]\n" +
           brandRows
-            .map((row) => {
+            .map((row: any) => {
               const brand = row.brand ?? "";
               const line = row.line_name ?? "";
               const model = row.model_name ?? "";
               return `ブランド:${brand} / ライン:${line} / モデル:${model}`;
             })
             .join("\n");
+        referenceBlocks.push(txt);
+      }
+
+      // 2) ジュエリー系
+      const { data: jewelryRows, error: jewelryError } = await supabase
+        .from("jewelry_reference")
+        .select("*")
+        .limit(30);
+
+      if (jewelryError) {
+        console.error("jewelry_reference 取得エラー:", jewelryError);
+      } else if (jewelryRows && jewelryRows.length > 0) {
+        const txt =
+          "[ジュエリー系リファレンス]\n" +
+          jewelryRows
+            .map((row: any) => JSON.stringify(row))
+            .join("\n");
+        referenceBlocks.push(txt);
+      }
+
+      // 3) 金工・漆系
+      const { data: kinkoRows, error: kinkoError } = await supabase
+        .from("kinko_urushi_reference")
+        .select("*")
+        .limit(30);
+
+      if (kinkoError) {
+        console.error("kinko_urushi_reference 取得エラー:", kinkoError);
+      } else if (kinkoRows && kinkoRows.length > 0) {
+        const txt =
+          "[金工・漆器系リファレンス]\n" +
+          kinkoRows
+            .map((row: any) => JSON.stringify(row))
+            .join("\n");
+        referenceBlocks.push(txt);
       }
     } catch (e) {
-      console.error("brand_data_reference_v2 取得中の例外:", e);
+      console.error("リファレンス取得中の例外:", e);
     }
+
+    const referenceText = referenceBlocks.join("\n\n");
+
+    // OpenAI に渡す content を組み立てる
+    const content: any[] = [
+      {
+        type: "input_text",
+        text: SYSTEM_PROMPT,
+      },
+      ...(referenceText
+        ? [
+            {
+              type: "input_text",
+              text:
+                referenceText +
+                "\n---\n上記のリファレンスは「ブランドバッグ系」「ジュエリー系」「金工・漆器系」などジャンルごとに分かれています。画像から推定されるジャンルに最も近いブロックを主に参考にして査定してください。",
+            },
+          ]
+        : []),
+      ...images.map((u) => ({
+        type: "input_image",
+        image_url: u,
+      })),
+    ];
 
     // OpenAI に渡す content を組み立てる
     const content: any[] = [
