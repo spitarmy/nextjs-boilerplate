@@ -4,7 +4,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import UploadForm from "./components/UploadForm";
-import { supabase } from "../lib/supabase"; // app 直下 → lib/supabase.ts
+import { supabase } from "../lib/supabase";
 
 type AuthStatus = "checking" | "need_login" | "ok";
 
@@ -24,13 +24,14 @@ export default function Page() {
         return;
       }
 
-      // セッションあり → 画面表示してOK
+      // セッションあり → 画面表示OK
       setStatus("ok");
     };
 
     checkAuth();
   }, [router]);
 
+  // ログアウト処理
   const handleLogout = async () => {
     await supabase.auth.signOut();
     if (typeof window !== "undefined") {
@@ -39,7 +40,7 @@ export default function Page() {
     router.push("/login");
   };
 
-  // デバッグ表示用：状態ごとに文言を変える
+  // 状態別のDEBUG表示
   if (status === "checking") {
     return (
       <main style={{ padding: 16 }}>
@@ -50,8 +51,6 @@ export default function Page() {
   }
 
   if (status === "need_login") {
-    // ほぼ一瞬で /login に飛ぶはずだが、
-    // 万が一 push が走らなかった時に一応メッセージを出す
     return (
       <main style={{ padding: 16 }}>
         <h1>DEBUG LOGIN: need_login</h1>
@@ -60,7 +59,7 @@ export default function Page() {
     );
   }
 
-  // ここに来ている = ログイン済み
+  // ここまで来ている = ログイン済み
   return (
     <main style={{ padding: 16 }}>
       <h1 style={{ fontSize: 14, color: "#16a34a", marginTop: 0 }}>
