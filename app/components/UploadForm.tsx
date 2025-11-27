@@ -1,7 +1,6 @@
-// components/UploadForm.tsx
-'use client';
+"use client";
 
-import React, { useState } from 'react';
+import React, { useState } from "react";
 
 type AssessResponse = {
   ok: boolean;
@@ -9,154 +8,197 @@ type AssessResponse = {
   output_text?: string;
   mercari_title?: string;
   mercari_description?: string;
+  confidence?: number | null;
 };
 
 export default function UploadForm() {
-  const [files, setFiles] = useState<File[]>([]);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  // 最大3枚の画像
+  const [imageFiles, setImageFiles] = useState<File[]>([]);
+  const [imagePreviews, setImagePreviews] = useState<string[]>([]);
+
   const [loading, setLoading] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [result, setResult] = useState<AssessResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  // 画像を選択したとき
-  function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const list = Array.from(e.target.files ?? []);
-    setFiles(list);
-    setResult(null);
-    setErrorMsg(null);
+  const [outputText, setOutputText] = useState("");
+  const [mercariTitle, setMercariTitle] = useState("");
+  const [mercariDescription, setMercariDescription] = useState("");
+  const [confidence, setConfidence] = useState<number | null>(null);
 
-    if (list.length > 0) {
-      // 1枚目だけプレビュー表示
-      setPreviewUrl(URL.createObjectURL(list[0]));
-    } else {
-      setPreviewUrl(null);
-    }
-  }
+  // ------ 画像選択 ------
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
 
-  // 1ファイルを Supabase にアップロードして publicUrl を返す
-  async function uploadToSupabase(file: File): Promise<string> {
-    // ① まず /api/upload-url から signed URL をもらう
-    const urlRes = await fetch('/api/upload-url', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ filename: file.name }),
+    const selected = Array.from(files).slice(0, 3); // 最大3枚
+    setImageFiles(selected);
+
+    // preview作成
+    const readers = selected.map((file) => {
+      return new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.readAsDataURL(file);
+      });
     });
 
-    const urlJson = await urlRes.json();
-
-    if (!urlRes.ok || !urlJson.ok) {
-      throw new Error(urlJson.message ?? '署名付きURLの取得に失敗しました');
-    }
-
-    const uploadUrl: string = urlJson.uploadUrl;
-    const publicUrl: string = urlJson.publicUrl;
-
-    if (!uploadUrl || !publicUrl) {
-      throw new Error('uploadUrl または publicUrl が取得できませんでした');
-    }
-
-    // ② 署名付きURLに対して PUT で画像本体を送る
-    const putRes = await fetch(uploadUrl, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': file.type || 'application/octet-stream',
-        'x-upsert': 'true',
-      },
-      body: file,
+    Promise.all(readers).then((previewUrls) => {
+      setImagePreviews(previewUrls);
     });
 
-    if (!putRes.ok) {
-      throw new Error(`画像アップロードに失敗しました (status ${putRes.status})`);
+    setError(null);
+  };
+
+  // ------ 査定 ------
+  const handleAssess = async () => {
+    if (imagePreviews.length === 0) {
+      setError("画像を選択してください。");
+      return;
     }
 
-    // ③ /api/assess に渡すのは publicUrl
-    return publicUrl;
-  }
+    setLoading(true);
+    setError(null);
+    setOutputText("");
+    setMercariTitle("");
+    setMercariDescription("");
+    setConfidence(null);
 
-  // 「査定する」ボタン押下
-  async function onAssess() {
     try {
-      setErrorMsg(null);
-      setResult(null);
-
-      if (files.length === 0) {
-        setErrorMsg('画像を選択してください。');
-        return;
-      }
-
-      setLoading(true);
-
-      // ★ ここが方法Bの心臓部：
-      // すべての画像を Supabase にアップロード → 公開URLの配列を取得
-      const imageUrls = await Promise.all(files.map(uploadToSupabase));
-
-      // その URL 配列を /api/assess に投げる
-      const res = await fetch('/api/assess', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const res = await fetch("/api/assess", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          image_urls: imageUrls,
+          images: imagePreviews, // ← ３枚まとめて投げる
         }),
       });
 
-      const json = (await res.json()) as AssessResponse;
+      const json: AssessResponse = await res.json();
 
-      if (!res.ok || !json.ok) {
-        throw new Error(json.error ?? `HTTP error ${res.status}`);
+      if (!json.ok) {
+        setError(json.error ?? "査定でエラーが発生しました。");
+        return;
       }
 
-      setResult(json);
-    } catch (err: any) {
-      console.error(err);
-      setErrorMsg(
-        err?.message ??
-          '査定処理でエラーが発生しました。時間をおいて再度お試しください。'
+      setOutputText(json.output_text ?? "");
+      setMercariTitle(json.mercari_title ?? "");
+      setMercariDescription(json.mercari_description ?? "");
+      setConfidence(
+        typeof json.confidence === "number" ? json.confidence : null
       );
+    } catch (err) {
+      console.error(err);
+      setError("通信エラーが発生しました。");
     } finally {
       setLoading(false);
     }
-  }
+  };
 
   return (
-    <main style={{ padding: 16 }}>
-      <div style={{ marginBottom: 16 }}>
-        <input
-          type="file"
-          accept="image/*"
-          multiple
-          onChange={onPickFile}
-        />
-      </div>
+    <div style={{ display: "grid", gap: 12 }}>
+      {/* 画像アップロード */}
+      <input
+        type="file"
+        accept="image/*"
+        multiple
+        onChange={handleFileChange}
+        disabled={loading}
+      />
 
-      {previewUrl && (
-        <div style={{ marginBottom: 16 }}>
-          <img
-            src={previewUrl}
-            alt="preview"
-            style={{ maxWidth: 300, height: 'auto' }}
+      {/* プレビュー（3枚） */}
+      {imagePreviews.length > 0 && (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {imagePreviews.map((src, idx) => (
+            <img
+              key={idx}
+              src={src}
+              alt={`preview-${idx}`}
+              style={{ width: 120, borderRadius: 8 }}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* 査定ボタン */}
+      <button
+        type="button"
+        onClick={handleAssess}
+        disabled={loading}
+        style={{
+          padding: "10px 18px",
+          background: "#2563eb",
+          color: "#fff",
+          borderRadius: 8,
+          border: "none",
+          cursor: "pointer",
+          opacity: loading ? 0.6 : 1,
+        }}
+      >
+        {loading ? "査定中..." : "査定する"}
+      </button>
+
+      {/* エラー */}
+      {error && <p style={{ color: "red", fontSize: 12 }}>{error}</p>}
+
+      {/* 結果：社内向けコメント */}
+      {outputText && (
+        <div style={{ padding: 12, border: "1px solid #ddd", borderRadius: 8 }}>
+          <h3 style={{ marginTop: 0 }}>査定コメント（社内用）</h3>
+          <p style={{ whiteSpace: "pre-wrap" }}>{outputText}</p>
+
+          {/* 真贋％ */}
+          {confidence !== null && (
+            <p
+              style={{
+                marginTop: 8,
+                fontWeight: "bold",
+                color:
+                  confidence >= 80
+                    ? "#15803d"
+                    : confidence >= 60
+                    ? "#ca8a04"
+                    : "#b91c1c",
+              }}
+            >
+              真贋信頼度：{confidence}%
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* メルカリ用タイトル */}
+      {mercariTitle && (
+        <div>
+          <h3>メルカリ用タイトル</h3>
+          <p
+            style={{
+              padding: 8,
+              border: "1px solid #ddd",
+              borderRadius: 6,
+              background: "#fff",
+            }}
+          >
+            {mercariTitle}
+          </p>
+        </div>
+      )}
+
+      {/* メルカリ用説明文 */}
+      {mercariDescription && (
+        <div>
+          <h3>メルカリ用説明文</h3>
+          <textarea
+            readOnly
+            rows={10}
+            value={mercariDescription}
+            style={{
+              width: "100%",
+              padding: 8,
+              border: "1px solid #ddd",
+              borderRadius: 6,
+              fontSize: 13,
+            }}
           />
         </div>
       )}
-
-      <button onClick={onAssess} disabled={loading || files.length === 0}>
-        {loading ? '査定中…' : '査定する'}
-      </button>
-
-      {errorMsg && (
-        <p style={{ color: 'red', marginTop: 16 }}>
-          Error: {errorMsg}
-        </p>
-      )}
-
-      {result && result.ok && (
-        <div style={{ marginTop: 24 }}>
-          <h3>メルカリ用タイトル</h3>
-          <p>{result.mercari_title ?? '（未生成）'}</p>
-
-          <h3>メルカリ用説明文</h3>
-          <p>{result.mercari_description ?? result.output_text ?? '（未生成）'}</p>
-        </div>
-      )}
-    </main>
+    </div>
   );
 }
