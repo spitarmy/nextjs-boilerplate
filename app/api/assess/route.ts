@@ -164,6 +164,21 @@ export async function POST(req: NextRequest) {
       typeof parsed.mercari_description === "string"
         ? parsed.mercari_description
         : output_text;
+    const SYSTEM_PROMPT = [
+  // ← ここ追加
+const confidence =
+  typeof parsed.confidence === "number" ? parsed.confidence : null;
+
+return NextResponse.json(
+  {
+    ok: true,
+    output_text,
+    mercari_title,
+    mercari_description,
+    confidence,         // ← フロントに返す
+  },
+  { status: 200 }
+);
 
     return NextResponse.json(
       {
