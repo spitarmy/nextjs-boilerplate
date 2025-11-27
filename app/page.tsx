@@ -4,31 +4,33 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import UploadForm from "./components/UploadForm";
-import { supabase } from "../lib/supabase"; // ← app から見て 1階層上の lib
+import { supabase } from "../lib/supabase"; // app 直下 → lib/supabase.ts
+
+type AuthStatus = "checking" | "need_login" | "ok";
 
 export default function Page() {
   const router = useRouter();
-  const [checking, setChecking] = useState(true);
+  const [status, setStatus] = useState<AuthStatus>("checking");
 
-  // 画面表示前に「ログインしてるか？」をチェック
+  // 画面マウント時にログイン状態をチェック
   useEffect(() => {
     const checkAuth = async () => {
       const { data, error } = await supabase.auth.getSession();
 
       if (error || !data.session) {
-        // セッションなし → /login に飛ばす
+        // セッション無し → /login へ飛ばす
+        setStatus("need_login");
         router.push("/login");
         return;
       }
 
-      // セッションあり → 画面表示OK
-      setChecking(false);
+      // セッションあり → 画面表示してOK
+      setStatus("ok");
     };
 
     checkAuth();
   }, [router]);
 
-  // ログアウト処理（ヘッダーのボタンから呼ぶ）
   const handleLogout = async () => {
     await supabase.auth.signOut();
     if (typeof window !== "undefined") {
@@ -37,18 +39,34 @@ export default function Page() {
     router.push("/login");
   };
 
-  if (checking) {
-    // ログイン確認中
+  // デバッグ表示用：状態ごとに文言を変える
+  if (status === "checking") {
     return (
       <main style={{ padding: 16 }}>
+        <h1>DEBUG LOGIN: checking...</h1>
         <p>ログイン状態を確認しています...</p>
       </main>
     );
   }
 
-  // ここから先が、今までの査定画面
+  if (status === "need_login") {
+    // ほぼ一瞬で /login に飛ぶはずだが、
+    // 万が一 push が走らなかった時に一応メッセージを出す
+    return (
+      <main style={{ padding: 16 }}>
+        <h1>DEBUG LOGIN: need_login</h1>
+        <p>ログインページへ移動中です...</p>
+      </main>
+    );
+  }
+
+  // ここに来ている = ログイン済み
   return (
     <main style={{ padding: 16 }}>
+      <h1 style={{ fontSize: 14, color: "#16a34a", marginTop: 0 }}>
+        DEBUG LOGIN: ok（ログイン済み）
+      </h1>
+
       <div
         style={{
           display: "flex",
@@ -96,7 +114,6 @@ export default function Page() {
       <UploadForm />
 
       <script
-        // 画面読み込み時に /api/version を叩いてバッジに反映
         dangerouslySetInnerHTML={{
           __html: `
             (async function(){
