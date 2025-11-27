@@ -1,6 +1,7 @@
 // app/api/assess/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
+import { supabase } from "../../../lib/supabase"; // ★ パス注意：app/api/assess から lib へ
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -18,16 +19,19 @@ const SYSTEM_PROMPT = [
   "【厳守ルール】",
   "◆ 出力は必ず JSON 文字列のみ。",
   "◆ JSON のキーは output_text / mercari_title / mercari_description / confidence の4つのみ。",
-  "◆ confidence は 0〜100 の整数（%）で返し、理由を１〜３行で説明。",
+  "◆ confidence は 0〜100 の整数（%）で返す。",
   "",
   "【output_text（社内用）】",
-  "・1〜５行のみ。",
+  "・1〜5行のみ。",
   "・真贋、型名、状態、推定販売価格を含める。",
   "・価格は「◯◯,000〜◯◯,000円前後」で書く。",
+  "・価格は国内フリマアプリの『実際に売れた価格帯』を基準にし、",
+  "　その中でも【やや控えめ（相場の下限〜中間）】のレンジにする。",
+  "・強気な高値や買取店の店頭価格は絶対に参考にしない。",
   "",
   "【confidence（真贋信頼度）】",
   "・0〜100 の整数で返す。",
-  "・画像から判断した真贋確度を示す。",
+  "・画像などから判断した真贋の確からしさを数値化する。",
   "・例：85 なら「85%」という意味。",
   "",
   "【mercari_title（40文字以内）】",
@@ -48,8 +52,6 @@ const SYSTEM_PROMPT = [
   '必ず以下の形式の JSON 文字列のみを返す：',
   '{"output_text":"社内用コメント","mercari_title":"タイトル","mercari_description":"説明文","confidence":90}'
 ].join("\\n");
-
-
 
 export async function POST(req: NextRequest) {
   try {
@@ -101,11 +103,49 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // ★★★ ここで Supabase からブランドリファレンスを少し読む ★★★
+    let brandReferenceText = "";
+    try {
+      const { data: brandRows, error: brandError } = await supabase
+        .from("brand_data_reference_v2")
+        .select("brand,line_name,model_name")
+        .limit(30); // とりあえず上から30件だけ
+
+      if (brandError) {
+        console.error("brand_data_reference_v2 取得エラー:", brandError);
+      } else if (brandRows && brandRows.length > 0) {
+        brandReferenceText =
+          "以下はブランドリファレンスデータの一部です。\n" +
+          brandRows
+            .map((row) => {
+              const brand = row.brand ?? "";
+              const line = row.line_name ?? "";
+              const model = row.model_name ?? "";
+              return `ブランド:${brand} / ライン:${line} / モデル:${model}`;
+            })
+            .join("\n");
+      }
+    } catch (e) {
+      console.error("brand_data_reference_v2 取得中の例外:", e);
+    }
+
+    // OpenAI に渡す content を組み立てる
     const content: any[] = [
       {
         type: "input_text",
         text: SYSTEM_PROMPT,
       },
+      // Supabase から読めたときだけ追加
+      ...(brandReferenceText
+        ? [
+            {
+              type: "input_text",
+              text:
+                brandReferenceText +
+                "\n---\n上記のブランドリファレンスも参考にしつつ、画像の商品を査定してください。",
+            },
+          ]
+        : []),
       ...images.map((u) => ({
         type: "input_image",
         image_url: u,
@@ -115,6 +155,7 @@ export async function POST(req: NextRequest) {
     // OpenAI に査定を依頼
     const aiRes: any = await openai.responses.create({
       model: "gpt-4.1",
+      temperature: 0.2,
       input: [
         {
           role: "user",
@@ -154,36 +195,33 @@ export async function POST(req: NextRequest) {
       );
     }
 
-     // JSON.parse(text) のあと
+    const output_text =
+      typeof parsed.output_text === "string" ? parsed.output_text : String(text);
+    const mercari_title =
+      typeof parsed.mercari_title === "string"
+        ? parsed.mercari_title
+        : "【仮】カンテノ自動査定";
+    const mercari_description =
+      typeof parsed.mercari_description === "string"
+        ? parsed.mercari_description
+        : output_text;
 
-const output_text =
-  typeof parsed.output_text === "string" ? parsed.output_text : String(text);
-const mercari_title =
-  typeof parsed.mercari_title === "string"
-    ? parsed.mercari_title
-    : "【仮】カンテノ自動査定";
-const mercari_description =
-  typeof parsed.mercari_description === "string"
-    ? parsed.mercari_description
-    : output_text;
+    const confidence =
+      typeof parsed.confidence === "number" ? parsed.confidence : null;
 
-// ★ ここで confidence を取り出す
-const confidence =
-  typeof parsed.confidence === "number" ? parsed.confidence : null;
+    // （将来）confidence が十分高いときに training_items へ自動登録したければ、
+    // ここで supabase.from('training_items').insert(...) を書く
 
-// ★ ここで一回だけ返す
-return NextResponse.json(
-  {
-    ok: true,
-    output_text,
-    mercari_title,
-    mercari_description,
-    confidence,
-  },
-  { status: 200 }
-);
-
-
+    return NextResponse.json(
+      {
+        ok: true,
+        output_text,
+        mercari_title,
+        mercari_description,
+        confidence,
+      },
+      { status: 200 }
+    );
   } catch (e: any) {
     console.error("assess error", e);
     const msg =
