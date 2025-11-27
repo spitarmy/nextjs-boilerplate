@@ -2,7 +2,7 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import { supabase } from "../lib/supabase"; // パス注意：プロジェクト構造に合わせて
+import { supabase } from "../../lib/supabase"; // パス注意：プロジェクト構造に合わせて
 
 export default function SignUpPage() {
   const [email, setEmail] = useState("");
