@@ -114,7 +114,7 @@ export async function POST(req: NextRequest) {
 
     // OpenAI に査定を依頼
     const aiRes: any = await openai.responses.create({
-      model: "gpt-4.1-pro",
+      model: "gpt-4.1",
       input: [
         {
           role: "user",
