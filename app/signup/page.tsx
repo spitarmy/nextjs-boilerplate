@@ -2,12 +2,13 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import { supabase } from "../../lib/supabase"; // パス注意：プロジェクト構造に合わせて
+import { supabase } from "../../lib/supabase";
 
 export default function SignUpPage() {
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
+  const [inviteCode, setInviteCode] = useState(""); // 招待コード
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -19,6 +20,27 @@ export default function SignUpPage() {
     setLoading(true);
 
     try {
+      // 1️⃣ 招待コードが正しいかチェック
+      const { data: invite, error: inviteError } = await supabase
+        .from("signup_invites")
+        .select("id, max_uses, used_count")
+        .eq("code", inviteCode)
+        .single();
+
+      if (inviteError || !invite) {
+        setError("招待コードが正しくありません。");
+        setLoading(false);
+        return;
+      }
+
+      // 回数オーバーしてないか
+      if (invite.used_count >= invite.max_uses) {
+        setError("この招待コードはすでに使用されています。");
+        setLoading(false);
+        return;
+      }
+
+      // 2️⃣ Supabase Auth でユーザー作成
       const { data, error: signUpError } = await supabase.auth.signUp({
         email,
         password,
@@ -30,7 +52,7 @@ export default function SignUpPage() {
         return;
       }
 
-      // テナント & プロフィール作成
+      // 3️⃣ テナント & プロフィール作成 (さっき作った /api/auth/after-signup を呼ぶ)
       const res = await fetch("/api/auth/after-signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -47,7 +69,13 @@ export default function SignUpPage() {
         return;
       }
 
-      setMessage("登録が完了しました。ログインしてください。");
+      // 4️⃣ 招待コードの使用回数を +1
+      await supabase
+        .from("signup_invites")
+        .update({ used_count: invite.used_count + 1 })
+        .eq("id", invite.id);
+
+      setMessage("登録が完了しました。ログインページからログインしてください。");
     } catch (err: any) {
       console.error(err);
       setError("予期せぬエラーが発生しました。");
@@ -67,6 +95,7 @@ export default function SignUpPage() {
           onChange={(e) => setName(e.target.value)}
           required
         />
+
         <input
           type="email"
           placeholder="メールアドレス"
@@ -74,11 +103,20 @@ export default function SignUpPage() {
           onChange={(e) => setEmail(e.target.value)}
           required
         />
+
         <input
           type="password"
           placeholder="パスワード"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
+          required
+        />
+
+        <input
+          type="text"
+          placeholder="招待コード"
+          value={inviteCode}
+          onChange={(e) => setInviteCode(e.target.value)}
           required
         />
 
