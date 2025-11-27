@@ -154,7 +154,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const output_text =
+      const output_text =
       typeof parsed.output_text === "string" ? parsed.output_text : String(text);
     const mercari_title =
       typeof parsed.mercari_title === "string"
@@ -164,31 +164,23 @@ export async function POST(req: NextRequest) {
       typeof parsed.mercari_description === "string"
         ? parsed.mercari_description
         : output_text;
-    const SYSTEM_PROMPT = [
-  // ← ここ追加
-const confidence =
-  typeof parsed.confidence === "number" ? parsed.confidence : null;
 
-return NextResponse.json(
-  {
-    ok: true,
-    output_text,
-    mercari_title,
-    mercari_description,
-    confidence,         // ← フロントに返す
-  },
-  { status: 200 }
-);
+    // confidence をパース
+    const confidence =
+      typeof parsed.confidence === "number" ? parsed.confidence : null;
 
+    // ここで一回だけ返す
     return NextResponse.json(
       {
         ok: true,
         output_text,
         mercari_title,
         mercari_description,
+        confidence,
       },
       { status: 200 }
     );
+
   } catch (e: any) {
     console.error("assess error", e);
     const msg =
