@@ -15,15 +15,16 @@ export default function ProtectedPageWrapper({ children }: Props) {
 
   useEffect(() => {
     const checkAuth = async () => {
-      const { data, error } = await supabase.auth.getUser();
+      // 現在のセッション取得（ユーザーがログインしているか）
+      const { data, error } = await supabase.auth.getSession();
 
-      // 1) エラー or ユーザーなし → /login に飛ばす
-      if (error || !data.user) {
+      if (error || !data.session) {
+        // セッションなし → /login に飛ばす
         router.push("/login");
         return;
       }
 
-      // 2) ユーザーがいれば表示OK
+      // セッションあり → 子供（査定画面）を表示してOK
       setChecking(false);
     };
 
@@ -31,7 +32,7 @@ export default function ProtectedPageWrapper({ children }: Props) {
   }, [router]);
 
   if (checking) {
-    // ローディング中に一瞬だけ出す文言（なんでもOK）
+    // チェック中に一瞬だけ表示される
     return (
       <main style={{ padding: 24 }}>
         <p>ログイン状態を確認しています...</p>
