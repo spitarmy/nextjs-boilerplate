@@ -14,7 +14,7 @@ export async function kanteSearch(prompt: string, imageUrl?: string) {
   }
 
   const resp = await openai.responses.create({
-    model: "gpt-4o-pro",
+    model: "gpt-4.1",
     instructions:
       "あなたはリユース査定士。曖昧な場合は推測の根拠を短く書く。日本語で簡潔に答える。",
     input: [
