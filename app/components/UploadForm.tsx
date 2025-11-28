@@ -132,7 +132,7 @@ export default function UploadForm() {
           opacity: loading ? 0.6 : 1,
         }}
       >
-        {loading ? "査定中..." : "査定する"}
+        {loading ? "査定中..." : "AI査定開始"}
       </button>
 
       {/* エラー */}
