@@ -3,7 +3,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { supabase } from "../../lib/supabase"; // ← app/login から見て2階層上
+import { supabase } from "../../lib/supabase";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -11,7 +11,15 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [sessionId, setSessionId] = useState<string | null>(null);
+
+  // すでにログイン済みなら / に戻す
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const loggedIn = window.localStorage.getItem("kanteno_logged_in");
+    if (loggedIn) {
+      router.replace("/");
+    }
+  }, [router]);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -19,109 +27,116 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      const { data, error: signInError } =
-        await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
-
-      if (signInError || !data.user) {
-        setError(signInError?.message ?? "ログインに失敗しました。");
-        setLoading(false);
-        return;
-      }
-
-      const user = data.user;
-
-      // profiles から tenant_id を取る
-      const { data: profile, error: profileError } = await supabase
-        .from("profiles")
-        .select("tenant_id")
-        .eq("id", user.id)
-        .single();
-
-      if (profileError || !profile?.tenant_id) {
-        console.error("profile error", profileError);
-        setError("プロフィール情報の取得に失敗しました。");
-        setLoading(false);
-        return;
-      }
-
-      // 席数チェック付きでセッション登録
-      const res = await fetch("/api/session/register", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          tenantId: profile.tenant_id,
-          userId: user.id,
-        }),
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
       });
 
-      const json = await res.json();
-      if (!json.ok) {
-        setError(json.error ?? "ログイン可能枠を超えています。");
+      if (signInError) {
+        setError(signInError.message || "ログインに失敗しました。");
         setLoading(false);
         return;
       }
 
-      setSessionId(json.sessionId);
+      // ログイン OK → フラグを立ててから / へ
       if (typeof window !== "undefined") {
-        window.localStorage.setItem("kanteno_session_id", json.sessionId);
+        window.localStorage.setItem("kanteno_logged_in", "1");
       }
 
-      router.push("/");
-    } catch (err: any) {
-      console.error(err);
-      setError("予期せぬエラーが発生しました。");
+      router.replace("/");
+    } catch (e: any) {
+      setError(e?.message || "予期せぬエラーが発生しました。");
     } finally {
       setLoading(false);
     }
   };
 
-  // 既存 sessionId を復元（ページ再読込用）
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const stored = window.localStorage.getItem("kanteno_session_id");
-    if (stored) setSessionId(stored);
-  }, []);
-
-  // 定期 ping（60秒おき）
-  useEffect(() => {
-    if (!sessionId) return;
-    const id = setInterval(() => {
-      fetch("/api/session/ping", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId }),
-      }).catch(() => {});
-    }, 60 * 1000);
-    return () => clearInterval(id);
-  }, [sessionId]);
-
   return (
-    <main style={{ padding: 24, maxWidth: 400, margin: "0 auto" }}>
-      <h2>ログイン</h2>
-      <form onSubmit={handleSubmit} style={{ display: "grid", gap: 12 }}>
+    <main
+      style={{
+        minHeight: "100vh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 16,
+      }}
+    >
+      <form
+        onSubmit={handleSubmit}
+        style={{
+          width: "100%",
+          maxWidth: 360,
+          border: "1px solid #e5e7eb",
+          borderRadius: 12,
+          padding: 24,
+          boxShadow: "0 10px 25px rgba(0,0,0,0.04)",
+          background: "#ffffff",
+        }}
+      >
+        <h1 style={{ fontSize: 20, marginBottom: 4 }}>リサイくん ログイン</h1>
+        <p style={{ fontSize: 12, color: "#6b7280", marginBottom: 16 }}>
+          管理者から発行されたアカウントでログインしてください。
+        </p>
+
+        <label style={{ fontSize: 12, display: "block", marginBottom: 4 }}>
+          メールアドレス
+        </label>
         <input
           type="email"
-          placeholder="メールアドレス"
+          required
           value={email}
           onChange={(e) => setEmail(e.target.value)}
-          required
+          style={{
+            width: "100%",
+            border: "1px solid #d1d5db",
+            borderRadius: 8,
+            padding: "8px 10px",
+            fontSize: 14,
+            marginBottom: 12,
+          }}
         />
+
+        <label style={{ fontSize: 12, display: "block", marginBottom: 4 }}>
+          パスワード
+        </label>
         <input
           type="password"
-          placeholder="パスワード"
+          required
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          required
+          style={{
+            width: "100%",
+            border: "1px solid #d1d5db",
+            borderRadius: 8,
+            padding: "8px 10px",
+            fontSize: 14,
+            marginBottom: 16,
+          }}
         />
 
-        <button type="submit" disabled={loading}>
+        {error && (
+          <p style={{ color: "#b91c1c", fontSize: 12, marginBottom: 12 }}>
+            {error}
+          </p>
+        )}
+
+        <button
+          type="submit"
+          disabled={loading}
+          style={{
+            width: "100%",
+            padding: "10px 12px",
+            borderRadius: 999,
+            border: "none",
+            background: loading ? "#9ca3af" : "#2563eb",
+            color: "#fff",
+            fontSize: 14,
+            fontWeight: 600,
+            cursor: loading ? "default" : "pointer",
+          }}
+        >
           {loading ? "ログイン中..." : "ログイン"}
         </button>
-
-        {error && <p style={{ color: "red", fontSize: 12 }}>{error}</p>}
       </form>
     </main>
   );
