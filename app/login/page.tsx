@@ -1,116 +1,143 @@
-// app/page.tsx
+// app/login/page.tsx
 "use client";
 
-import { useEffect, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import UploadForm from "./components/UploadForm";
-import { supabase } from "../lib/supabase";
+import { supabase } from "../../lib/supabase";
 
-type AuthStatus = "checking" | "ok";
-
-export default function Page() {
+export default function LoginPage() {
   const router = useRouter();
-  const [status, setStatus] = useState<AuthStatus>("checking");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  // 画面マウント時に「ログイン済みか」をチェック
+  // すでにログイン済みなら / に戻す
   useEffect(() => {
-    // ブラウザだけで動かす
     if (typeof window === "undefined") return;
-
     const loggedIn = window.localStorage.getItem("kanteno_logged_in");
-
-    if (!loggedIn) {
-      // ログインしていない → /login に飛ばす
-      router.replace("/login");
-      return;
+    if (loggedIn) {
+      router.replace("/");
     }
-
-    // ログイン済み
-    setStatus("ok");
   }, [router]);
 
-  // チェック中はなにも出さない（チラ見え防止）
-  if (status !== "ok") {
-    return (
-      <main style={{ padding: 16 }}>
-        <p>ログイン画面へ移動中です...</p>
-      </main>
-    );
-  }
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setLoading(true);
 
-  // ログアウト処理
-  const handleLogoutClick = async () => {
-    if (typeof window !== "undefined") {
-      window.localStorage.removeItem("kanteno_logged_in");
+    try {
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (signInError) {
+        setError(signInError.message || "ログインに失敗しました。");
+        setLoading(false);
+        return;
+      }
+
+      // ログイン OK → フラグを立ててから / へ
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem("kanteno_logged_in", "1");
+      }
+
+      router.replace("/");
+    } catch (e: any) {
+      setError(e?.message || "予期せぬエラーが発生しました。");
+    } finally {
+      setLoading(false);
     }
-    await supabase.auth.signOut().catch(() => {});
-    router.push("/login");
   };
 
   return (
-    <main style={{ padding: 16 }}>
-      <div
+    <main
+      style={{
+        minHeight: "100vh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 16,
+      }}
+    >
+      <form
+        onSubmit={handleSubmit}
         style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: 10,
+          width: "100%",
+          maxWidth: 360,
+          border: "1px solid #e5e7eb",
+          borderRadius: 12,
+          padding: 24,
+          boxShadow: "0 10px 25px rgba(0,0,0,0.04)",
+          background: "#ffffff",
         }}
       >
-        <h2 style={{ margin: 0, fontSize: 18 }}>査定する</h2>
+        <h1 style={{ fontSize: 20, marginBottom: 4 }}>リサイくん ログイン</h1>
+        <p style={{ fontSize: 12, color: "#6b7280", marginBottom: 16 }}>
+          管理者から発行されたアカウントでログインしてください。
+        </p>
 
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <span
-            id="version-badge"
-            style={{
-              fontSize: 12,
-              background: "#eef2ff",
-              color: "#3730a3",
-              padding: "4px 8px",
-              borderRadius: 999,
-              fontFamily:
-                "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
-            }}
-          >
-            v?
-          </span>
+        <label style={{ fontSize: 12, display: "block", marginBottom: 4 }}>
+          メールアドレス
+        </label>
+        <input
+          type="email"
+          required
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          style={{
+            width: "100%",
+            border: "1px solid #d1d5db",
+            borderRadius: 8,
+            padding: "8px 10px",
+            fontSize: 14,
+            marginBottom: 12,
+          }}
+        />
 
-          <button
-            type="button"
-            onClick={handleLogoutClick}
-            style={{
-              fontSize: 12,
-              padding: "4px 10px",
-              borderRadius: 999,
-              border: "1px solid #e5e7eb",
-              background: "#fff",
-              cursor: "pointer",
-            }}
-          >
-            ログアウト
-          </button>
-        </div>
-      </div>
+        <label style={{ fontSize: 12, display: "block", marginBottom: 4 }}>
+          パスワード
+        </label>
+        <input
+          type="password"
+          required
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          style={{
+            width: "100%",
+            border: "1px solid #d1d5db",
+            borderRadius: 8,
+            padding: "8px 10px",
+            fontSize: 14,
+            marginBottom: 16,
+          }}
+        />
 
-      <UploadForm />
+        {error && (
+          <p style={{ color: "#b91c1c", fontSize: 12, marginBottom: 12 }}>
+            {error}
+          </p>
+        )}
 
-      {/* バージョン表示（元々のまま） */}
-      <script
-        dangerouslySetInnerHTML={{
-          __html: `
-            (async function(){
-              try{
-                const r = await fetch('/api/version');
-                const j = await r.json();
-                var el = document.getElementById('version-badge');
-                if (el) {
-                  el.textContent = (j.ok ? j.version : 'v?');
-                }
-              }catch(e){}
-            })();
-          `,
-        }}
-      />
+        <button
+          type="submit"
+          disabled={loading}
+          style={{
+            width: "100%",
+            padding: "10px 12px",
+            borderRadius: 999,
+            border: "none",
+            background: loading ? "#9ca3af" : "#2563eb",
+            color: "#fff",
+            fontSize: 14,
+            fontWeight: 600,
+            cursor: loading ? "default" : "pointer",
+          }}
+        >
+          {loading ? "ログイン中..." : "ログイン"}
+        </button>
+      </form>
     </main>
   );
 }
