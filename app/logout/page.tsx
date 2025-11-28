@@ -10,23 +10,25 @@ export default function LogoutPage() {
 
   useEffect(() => {
     const run = async () => {
-      // Supabase のセッションを削除
-      await supabase.auth.signOut();
-
-      // 同時ログイン制御用のローカルストレージも一応消す
-      if (typeof window !== "undefined") {
-        window.localStorage.removeItem("kanteno_session_id");
+      try {
+        await supabase.auth.signOut();
+      } catch (e) {
+        console.error(e);
       }
 
-      router.push("/login");
+      if (typeof window !== "undefined") {
+        window.localStorage.removeItem("kanteno_logged_in");
+      }
+
+      router.replace("/login");
     };
 
     run();
   }, [router]);
 
   return (
-    <main style={{ padding: 24 }}>
-      <p>ログアウトしています...</p>
+    <main style={{ padding: 16 }}>
+      <p>ログアウト中です…</p>
     </main>
   );
 }
