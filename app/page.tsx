@@ -44,7 +44,7 @@ export default function Page() {
   if (status === "checking") {
     return (
       <main style={{ padding: 16 }}>
-        <h1>DEBUG LOGIN: checking...</h1>
+        <h1 style={{ color: "#2563eb" }}>DEBUG LOGIN: checking...</h1>
         <p>ログイン状態を確認しています...</p>
       </main>
     );
@@ -53,7 +53,7 @@ export default function Page() {
   if (status === "need_login") {
     return (
       <main style={{ padding: 16 }}>
-        <h1>DEBUG LOGIN: need_login</h1>
+        <h1 style={{ color: "#dc2626" }}>DEBUG LOGIN: need_login</h1>
         <p>ログインページへ移動中です...</p>
       </main>
     );
