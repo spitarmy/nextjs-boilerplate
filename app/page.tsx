@@ -4,38 +4,32 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import UploadForm from "./components/UploadForm";
-import { supabase } from "../lib/supabase"; // ← app 直下 → lib/supabase.ts の想定
+import { supabase } from "../lib/supabase";
 
-type AuthStatus = "checking" | "need_login" | "ok";
+type AuthStatus = "checking" | "ok";
 
 export default function Page() {
   const router = useRouter();
   const [status, setStatus] = useState<AuthStatus>("checking");
 
-  //----------------------------------
-  // マウント時にログイン状態をチェック
-  //----------------------------------
+  // 画面マウント時に「ログイン済みか」をチェック
   useEffect(() => {
-    const checkAuth = async () => {
-      const { data, error } = await supabase.auth.getSession();
+    // ブラウザだけで動かす
+    if (typeof window === "undefined") return;
 
-      // セッション無し or エラー → /login へ
-      if (error || !data.session) {
-        setStatus("need_login");
-        router.push("/login");
-        return;
-      }
+    const loggedIn = window.localStorage.getItem("kanteno_logged_in");
 
-      // ログイン済み
-      setStatus("ok");
-    };
+    if (!loggedIn) {
+      // ログインしていない → /login に飛ばす
+      router.replace("/login");
+      return;
+    }
 
-    checkAuth();
+    // ログイン済み
+    setStatus("ok");
   }, [router]);
 
-  //----------------------------------
-  // ログイン確認中はアップロード画面を出さない
-  //----------------------------------
+  // チェック中はなにも出さない（チラ見え防止）
   if (status !== "ok") {
     return (
       <main style={{ padding: 16 }}>
@@ -44,11 +38,12 @@ export default function Page() {
     );
   }
 
-  //----------------------------------
-  // ここから先は「ログイン済みユーザーだけ」が見える
-  //----------------------------------
+  // ログアウト処理
   const handleLogoutClick = async () => {
-    await supabase.auth.signOut();
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem("kanteno_logged_in");
+    }
+    await supabase.auth.signOut().catch(() => {});
     router.push("/login");
   };
 
@@ -99,7 +94,7 @@ export default function Page() {
 
       <UploadForm />
 
-      {/* バージョン表示のためのスクリプト（元のまま） */}
+      {/* バージョン表示（元々のまま） */}
       <script
         dangerouslySetInnerHTML={{
           __html: `
@@ -111,7 +106,7 @@ export default function Page() {
                 if (el) {
                   el.textContent = (j.ok ? j.version : 'v?');
                 }
-              }catch(e){ /* noop */ }
+              }catch(e){}
             })();
           `,
         }}
