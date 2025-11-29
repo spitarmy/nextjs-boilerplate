@@ -1,14 +1,9 @@
 // app/page.tsx
 "use client";
-export const dynamic = "force-dynamic";
 
+// 既にある /app/login/page.tsx をそのまま再利用する
+import LoginPage from "./login/page";
 
 export default function RootPage() {
-  return (
-    <main style={{ padding: 32 }}>
-      <h1>これはテストページです</h1>
-      <p>/app/page.tsx が反映されています。</p>
-      <a href="/login">ログインページへ</a>
-    </main>
-  );
+  return <LoginPage />;
 }
