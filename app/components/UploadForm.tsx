@@ -1,7 +1,9 @@
 // app/components/UploadForm.tsx
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
+import { supabase } from "../../lib/supabase"; // すでにあれば重複NG
+
 
 type AssessResponse = {
   ok: boolean;
