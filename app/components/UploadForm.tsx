@@ -110,7 +110,7 @@ export default function UploadForm() {
       const res = await fetch("/api/assess", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image_urls: imageUrls }),
+        body: JSON.stringify({ image_urls: imageUrls,user_id: userId, }),
       });
 
       const json: AssessResponse = await res.json();
