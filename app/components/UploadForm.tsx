@@ -1,204 +1,180 @@
+// app/components/UploadForm.tsx
 "use client";
 
-import React, { useState } from "react";
+import React, { FormEvent, useState } from "react";
 
-type AssessResponse = {
-  ok: boolean;
-  error?: string;
-  output_text?: string;
-  mercari_title?: string;
-  mercari_description?: string;
-  confidence?: number | null;
-};
+// 画像をクライアント側でリサイズして dataURL を返す関数
+async function resizeImage(
+  file: File,
+  maxSize = 1024,
+  quality = 0.7
+): Promise<string> {
+  // 画像ファイルを dataURL として読み込む
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = (err) => reject(err);
+    reader.readAsDataURL(file);
+  });
+
+  // Image に読み込んでキャンバスで縮小
+  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = (err) => reject(err);
+    image.src = dataUrl;
+  });
+
+  let { width, height } = img;
+
+  // 長辺が maxSize を超える場合のみ縮小
+  if (width > height && width > maxSize) {
+    height = (height * maxSize) / width;
+    width = maxSize;
+  } else if (height > width && height > maxSize) {
+    width = (width * maxSize) / height;
+    height = maxSize;
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Canvas context not available");
+
+  ctx.drawImage(img, 0, 0, width, height);
+
+  // JPEG で圧縮（quality 0.7 くらいならかなり軽くなる）
+  const compressedDataUrl = canvas.toDataURL("image/jpeg", quality);
+  return compressedDataUrl;
+}
 
 export default function UploadForm() {
-  // 最大3枚の画像
-  const [imageFiles, setImageFiles] = useState<File[]>([]);
-  const [imagePreviews, setImagePreviews] = useState<string[]>([]);
-
+  const [files, setFiles] = useState<File[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<string | null>(null);
 
-  const [outputText, setOutputText] = useState("");
-  const [mercariTitle, setMercariTitle] = useState("");
-  const [mercariDescription, setMercariDescription] = useState("");
-  const [confidence, setConfidence] = useState<number | null>(null);
-
-  // ------ 画像選択 ------
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files) return;
-
-    const selected = Array.from(files).slice(0, 3); // 最大3枚
-    setImageFiles(selected);
-
-    // preview作成
-    const readers = selected.map((file) => {
-      return new Promise<string>((resolve) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result as string);
-        reader.readAsDataURL(file);
-      });
-    });
-
-    Promise.all(readers).then((previewUrls) => {
-      setImagePreviews(previewUrls);
-    });
-
+    if (!e.target.files) return;
+    setFiles(Array.from(e.target.files));
     setError(null);
+    setResult(null);
   };
 
-  // ------ 査定 ------
-  const handleAssess = async () => {
-    if (imagePreviews.length === 0) {
-      setError("画像を選択してください。");
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setResult(null);
+
+    if (files.length === 0) {
+      setError("画像ファイルを選択してください。");
       return;
     }
 
-    setLoading(true);
-    setError(null);
-    setOutputText("");
-    setMercariTitle("");
-    setMercariDescription("");
-    setConfidence(null);
-
     try {
+      setLoading(true);
+
+      // ⚠️ ここで全画像をリサイズ＆圧縮する
+      const resizedImages = await Promise.all(
+        files.map((file) => resizeImage(file, 1024, 0.7))
+      );
+
       const res = await fetch("/api/assess", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+        },
+        // 以前と同じ形： images: string[]（dataURL の配列）
         body: JSON.stringify({
-          images: imagePreviews, // ← ３枚まとめて投げる
+          images: resizedImages,
         }),
       });
 
-      const json: AssessResponse = await res.json();
-
-      if (!json.ok) {
-        setError(json.error ?? "査定でエラーが発生しました。");
+      if (res.status === 413) {
+        setError(
+          "画像の合計サイズが大きすぎます。枚数を減らすか、もっと小さい画像でお試しください。"
+        );
         return;
       }
 
-      setOutputText(json.output_text ?? "");
-      setMercariTitle(json.mercari_title ?? "");
-      setMercariDescription(json.mercari_description ?? "");
-      setConfidence(
-        typeof json.confidence === "number" ? json.confidence : null
-      );
-    } catch (err) {
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        console.error("API error:", res.status, text);
+        setError(`査定に失敗しました。（${res.status}）`);
+        return;
+      }
+
+      const json = await res.json().catch(() => null);
+      setResult(JSON.stringify(json, null, 2));
+    } catch (err: any) {
       console.error(err);
-      setError("通信エラーが発生しました。");
+      setError("通信中にエラーが発生しました。");
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div style={{ display: "grid", gap: 12 }}>
-      {/* 画像アップロード */}
-      <input
-        type="file"
-        accept="image/*"
-        multiple
-        onChange={handleFileChange}
-        disabled={loading}
-      />
+    <form onSubmit={handleSubmit} style={{ display: "grid", gap: 12 }}>
+      <div>
+        <input
+          type="file"
+          accept="image/*"
+          multiple
+          onChange={handleFileChange}
+        />
+        <p style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
+          ※ 最大 3 枚程度まで推奨。長辺 1024px・JPEG 圧縮でサーバーに送信します。
+        </p>
+      </div>
 
-      {/* プレビュー（3枚） */}
-      {imagePreviews.length > 0 && (
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {imagePreviews.map((src, idx) => (
-            <img
-              key={idx}
-              src={src}
-              alt={`preview-${idx}`}
-              style={{ width: 120, borderRadius: 8 }}
-            />
+      {files.length > 0 && (
+        <ul style={{ fontSize: 12, paddingLeft: 16 }}>
+          {files.map((f) => (
+            <li key={f.name}>
+              {f.name} ({Math.round(f.size / 1024)} KB)
+            </li>
           ))}
-        </div>
+        </ul>
       )}
 
-      {/* 査定ボタン */}
       <button
-        type="button"
-        onClick={handleAssess}
-        disabled={loading}
+        type="submit"
+        disabled={loading || files.length === 0}
         style={{
-          padding: "10px 18px",
           background: "#2563eb",
-          color: "#fff",
-          borderRadius: 8,
+          color: "white",
           border: "none",
-          cursor: "pointer",
-          opacity: loading ? 0.6 : 1,
+          borderRadius: 999,
+          padding: "10px 24px",
+          fontSize: 14,
+          cursor: loading ? "default" : "pointer",
         }}
       >
         {loading ? "査定中..." : "AI査定開始"}
       </button>
 
-      {/* エラー */}
-      {error && <p style={{ color: "red", fontSize: 12 }}>{error}</p>}
-
-      {/* 結果：社内向けコメント */}
-      {outputText && (
-        <div style={{ padding: 12, border: "1px solid #ddd", borderRadius: 8 }}>
-          <h3 style={{ marginTop: 0 }}>査定コメント（社内用）</h3>
-          <p style={{ whiteSpace: "pre-wrap" }}>{outputText}</p>
-
-          {/* 真贋％ */}
-          {confidence !== null && (
-            <p
-              style={{
-                marginTop: 8,
-                fontWeight: "bold",
-                color:
-                  confidence >= 80
-                    ? "#15803d"
-                    : confidence >= 60
-                    ? "#ca8a04"
-                    : "#b91c1c",
-              }}
-            >
-              真贋信頼度：{confidence}%
-            </p>
-          )}
+      {error && (
+        <div style={{ color: "crimson", fontSize: 13, whiteSpace: "pre-wrap" }}>
+          {error}
         </div>
       )}
 
-      {/* メルカリ用タイトル */}
-      {mercariTitle && (
-        <div>
-          <h3>メルカリ用タイトル</h3>
-          <p
-            style={{
-              padding: 8,
-              border: "1px solid #ddd",
-              borderRadius: 6,
-              background: "#fff",
-            }}
-          >
-            {mercariTitle}
-          </p>
-        </div>
+      {result && (
+        <pre
+          style={{
+            marginTop: 8,
+            padding: 8,
+            background: "#f9fafb",
+            borderRadius: 8,
+            fontSize: 12,
+            overflowX: "auto",
+          }}
+        >
+          {result}
+        </pre>
       )}
-
-      {/* メルカリ用説明文 */}
-      {mercariDescription && (
-        <div>
-          <h3>メルカリ用説明文</h3>
-          <textarea
-            readOnly
-            rows={10}
-            value={mercariDescription}
-            style={{
-              width: "100%",
-              padding: 8,
-              border: "1px solid #ddd",
-              borderRadius: 6,
-              fontSize: 13,
-            }}
-          />
-        </div>
-      )}
-    </div>
+    </form>
   );
 }
