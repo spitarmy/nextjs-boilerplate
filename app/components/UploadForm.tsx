@@ -1,166 +1,115 @@
 // app/components/UploadForm.tsx
 "use client";
 
-import React, { useState, FormEvent, ChangeEvent } from "react";
+import React, { useState } from "react";
 
 type AssessResponse = {
-  ok?: boolean;
-  output_text?: string;            // ここに ```json ...``` が入ってくることがある
+  ok: boolean;
+  output_text?: string;
   mercari_title?: string;
   mercari_description?: string;
-  confidence?: number;
-  genre?: string;
-  item_name?: string;
+  confidence?: number | null;
+  genre?: string | null;
+  item_name?: string | null;
   error?: string;
-  [key: string]: any;
 };
 
 const MAX_FILES = 3;
-const MAX_FILE_SIZE_MB = 1.1;
-const MAX_TOTAL_SIZE_MB = 2.8;
+const MAX_FILE_SIZE = 2 * 1024 * 1024; // 2MB/枚 目安
+const MAX_LONG_SIDE = 1024; // px
 
-async function fileToDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = (e) => reject(e);
-    reader.readAsDataURL(file);
+async function fileToCompressedDataUrl(file: File): Promise<string> {
+  // 画像を読み込んでリサイズ & JPEG に圧縮
+  const img = document.createElement("img");
+  const url = URL.createObjectURL(file);
+
+  await new Promise<void>((resolve, reject) => {
+    img.onload = () => resolve();
+    img.onerror = (e) => reject(e);
+    img.src = url;
   });
-}
 
-/**
- * ```json\n{ ... }\n``` みたいな文字列から JSON オブジェクトを取り出す
- */
-function parseEmbeddedJson(raw?: string): any | null {
-  if (!raw) return null;
-  try {
-    // 最初の { と最後の } を探して、その間だけを JSON としてパース
-    const start = raw.indexOf("{");
-    const end = raw.lastIndexOf("}");
-    if (start === -1 || end === -1 || end <= start) return null;
-    const jsonText = raw.slice(start, end + 1);
-    return JSON.parse(jsonText);
-  } catch {
-    return null;
-  }
-}
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Canvas not supported");
 
-/**
- * ```json や ``` などコードフェンスを軽く取り除く
- */
-function stripCodeFence(text: string): string {
-  if (!text) return "";
-  let t = text.trim();
-  if (t.startsWith("```")) {
-    // 最初の改行まで飛ばす
-    const firstNewline = t.indexOf("\n");
-    if (firstNewline !== -1) {
-      t = t.slice(firstNewline + 1);
-    }
-  }
-  if (t.endsWith("```")) {
-    t = t.slice(0, t.lastIndexOf("```"));
-  }
-  return t.trim();
+  let { width, height } = img;
+  const scale = Math.min(1, MAX_LONG_SIDE / Math.max(width, height));
+  width = Math.round(width * scale);
+  height = Math.round(height * scale);
+
+  canvas.width = width;
+  canvas.height = height;
+  ctx.drawImage(img, 0, 0, width, height);
+
+  // 0.7くらいの品質でJPEG圧縮
+  const dataUrl = canvas.toDataURL("image/jpeg", 0.7);
+  URL.revokeObjectURL(url);
+  return dataUrl;
 }
 
 export default function UploadForm() {
   const [files, setFiles] = useState<File[]>([]);
-  const [previewUrls, setPreviewUrls] = useState<string[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AssessResponse | null>(null);
-  const [rawJson, setRawJson] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
-    setError(null);
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selected = Array.from(e.target.files ?? []);
+    const limited = selected.slice(0, MAX_FILES);
+    setFiles(limited);
     setResult(null);
-    setRawJson(null);
-
-    const list = Array.from(e.target.files ?? []);
-    const selected = list.slice(0, MAX_FILES);
-    setFiles(selected);
-
-    const urls = selected.map((f) => URL.createObjectURL(f));
-    setPreviewUrls(urls);
-
-    if (selected.length) {
-      const perErrors: string[] = [];
-      let totalSize = 0;
-      selected.forEach((f) => {
-        const mb = f.size / (1024 * 1024);
-        totalSize += mb;
-        if (mb > MAX_FILE_SIZE_MB) {
-          perErrors.push(`${f.name}: 約 ${mb.toFixed(2)}MB`);
-        }
-      });
-      if (perErrors.length) {
-        setError(
-          `画像が大きすぎる可能性があります：\n` +
-            perErrors.join("\n") +
-            `\n\n長辺を縮小してから再アップロードしてください。`
-        );
-      } else if (totalSize > MAX_TOTAL_SIZE_MB) {
-        setError(
-          `3枚合計のサイズが大きめです（約 ${totalSize.toFixed(
-            2
-          )}MB）。413エラーが出る場合は、画像を少し小さくしてください。`
-        );
-      }
-    }
+    setErrorMsg(null);
   };
 
-  const handleSubmit = async (e: FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError(null);
+    setErrorMsg(null);
     setResult(null);
-    setRawJson(null);
 
     if (!files.length) {
-      setError("画像ファイルを選択してください。");
+      setErrorMsg("画像を少なくとも1枚選択してください。");
       return;
     }
 
+    if (files.length > MAX_FILES) {
+      setErrorMsg(`画像は最大 ${MAX_FILES} 枚までです。`);
+      return;
+    }
+
+    // サイズチェック（かなりざっくり）
+    for (const f of files) {
+      if (f.size > MAX_FILE_SIZE * 3) {
+        setErrorMsg("画像サイズが大きすぎます。もう少し解像度を下げてください。");
+        return;
+      }
+    }
+
     setLoading(true);
+
     try {
-      const dataUrls: string[] = [];
-      for (const f of files) {
-        dataUrls.push(await fileToDataUrl(f));
+      // 画像を圧縮して dataURL に変換
+      const imageUrls: string[] = [];
+      for (const file of files) {
+        const dataUrl = await fileToCompressedDataUrl(file);
+        imageUrls.push(dataUrl);
       }
 
       const res = await fetch("/api/assess", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ images: dataUrls }),
+        body: JSON.stringify({ image_urls: imageUrls }),
       });
 
-      if (!res.ok) {
-        if (res.status === 413) {
-          setError(
-            "画像データが大きすぎます（413）。画像サイズを小さくするか、枚数を減らして再アップしてください。"
-          );
-        } else {
-          const text = await res.text();
-          setError(
-            `サーバーエラーが発生しました（${res.status}）。\n${text}`.slice(
-              0,
-              400
-            )
-          );
-        }
-        return;
-      }
-
       const json: AssessResponse = await res.json();
-      setResult(json);
-      setRawJson(JSON.stringify(json, null, 2));
-
-      if (json.error && !json.ok) {
-        setError(json.error);
+      if (!res.ok || !json.ok) {
+        setErrorMsg(json.error || "査定に失敗しました。時間をおいて再度お試しください。");
+      } else {
+        setResult(json);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      setError("ネットワークエラーが発生しました。時間をおいて再試行してください。");
+      setErrorMsg("通信エラーが発生しました。ネットワーク環境を確認してください。");
     } finally {
       setLoading(false);
     }
@@ -169,336 +118,197 @@ export default function UploadForm() {
   const copyToClipboard = async (text: string | undefined) => {
     if (!text) return;
     try {
-      await navigator.clipboard?.writeText(text);
-      alert("コピーしました。");
+      await navigator.clipboard.writeText(text);
+      alert("コピーしました");
     } catch {
-      alert("コピーに失敗しました。テキストを選択してコピーしてください。");
+      // clipboard API が使えない環境用フォールバックは省略
+      alert("コピーに失敗しました。手動で選択してコピーしてください。");
     }
   };
 
-  const prettyOutput = (text?: string) => (text ?? "").replace(/\\n/g, "\n");
-
-  // ====== ここから「表示用データの整形」 ======
-
-  const embedded = parseEmbeddedJson(result?.output_text);
-
-  const commentText: string | undefined =
-    embedded?.output_text ??
-    embedded?.comment ??
-    (result?.output_text ? stripCodeFence(result.output_text) : undefined);
-
-  const mercariTitle: string | undefined =
-    embedded?.mercari_title ?? result?.mercari_title;
-
-  const mercariDescription: string | undefined =
-    embedded?.mercari_description ?? result?.mercari_description;
-
-  const confidence: number | undefined =
-    typeof embedded?.confidence === "number"
-      ? embedded.confidence
-      : result?.confidence;
-
-  const genre: string | undefined = embedded?.genre ?? result?.genre;
-  const itemName: string | undefined = embedded?.item_name ?? result?.item_name;
-
-  // =========================================
-
   return (
-    <form onSubmit={handleSubmit}>
-      {/* ファイル選択 */}
-      <div
-        style={{
-          border: "1px dashed #cbd5e1",
-          padding: 16,
-          borderRadius: 12,
-          marginBottom: 16,
-          background: "#f8fafc",
-        }}
-      >
-        <label
+    <div style={{ maxWidth: 900, margin: "0 auto" }}>
+      <form onSubmit={handleSubmit}>
+        <div style={{ marginBottom: 8 }}>
+          <input
+            type="file"
+            accept="image/*"
+            multiple
+            onChange={handleFileChange}
+          />
+        </div>
+        <div style={{ fontSize: 12, color: "#555", marginBottom: 12 }}>
+          ※ 最大 {MAX_FILES} 枚まで選択可能。長辺 1024px に圧縮して送信します。
+        </div>
+
+        {files.length > 0 && (
+          <ul style={{ fontSize: 12, marginBottom: 12 }}>
+            {files.map((f, i) => (
+              <li key={i}>
+                {f.name}（{Math.round(f.size / 1024)} KB）
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <button
+          type="submit"
+          disabled={loading || files.length === 0}
           style={{
-            display: "block",
-            fontSize: 13,
-            marginBottom: 8,
-            fontWeight: 500,
+            width: "100%",
+            padding: "12px 16px",
+            borderRadius: 999,
+            border: "none",
+            background: "#2563eb",
+            color: "#fff",
+            fontSize: 16,
+            cursor: loading ? "default" : "pointer",
+            opacity: loading ? 0.6 : 1,
           }}
         >
-          画像ファイルを選択（最大 {MAX_FILES} 枚）
-        </label>
-        <input
-          type="file"
-          accept="image/*"
-          multiple
-          onChange={handleFileChange}
-          style={{ marginBottom: 8 }}
-        />
-        <div style={{ fontSize: 11, color: "#6b7280", lineHeight: 1.5 }}>
-          ・スマホ写真はそのままだとサイズが大きいことがあります。
-          <br />
-          ・長辺 1024px 程度に縮小すると 413 エラーが出にくくなります。
-        </div>
-      </div>
+          {loading ? "AI査定中..." : "AI査定開始"}
+        </button>
+      </form>
 
-      {/* プレビュー */}
-      {previewUrls.length > 0 && (
+      {errorMsg && (
         <div
           style={{
-            marginBottom: 16,
-            borderRadius: 12,
-            overflow: "hidden",
-            border: "1px solid #e5e7eb",
-          }}
-        >
-          {previewUrls.map((url, i) => (
-            <img
-              key={i}
-              src={url}
-              alt={`プレビュー${i + 1}`}
-              style={{
-                width: "100%",
-                height: "auto",
-                display: "block",
-                maxHeight: 300,
-                objectFit: "contain",
-                background: "#000",
-                borderBottom:
-                  i === previewUrls.length - 1
-                    ? "none"
-                    : "1px solid #e5e7eb",
-              }}
-            />
-          ))}
-        </div>
-      )}
-
-      {/* ボタン */}
-      <button
-        type="submit"
-        disabled={!files.length || loading}
-        style={{
-          width: "100%",
-          padding: "14px 0",
-          borderRadius: 999,
-          border: "none",
-          background: loading ? "#60a5fa" : "#2563eb",
-          color: "#fff",
-          fontWeight: 600,
-          fontSize: 15,
-          cursor: !files.length || loading ? "not-allowed" : "pointer",
-          boxShadow: "0 4px 12px rgba(37, 99, 235, 0.35)",
-          marginBottom: 16,
-        }}
-      >
-        {loading ? "AI査定中…" : "AI査定開始"}
-      </button>
-
-      {/* エラー */}
-      {error && (
-        <div
-          style={{
-            marginBottom: 16,
+            marginTop: 16,
             padding: 12,
             borderRadius: 8,
             background: "#fef2f2",
             color: "#b91c1c",
-            fontSize: 13,
-            whiteSpace: "pre-wrap",
+            fontSize: 14,
           }}
         >
-          {error}
+          {errorMsg}
         </div>
       )}
 
-      {/* 結果 */}
-      {result && !error && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {result && result.ok && (
+        <div style={{ marginTop: 24, display: "grid", gap: 16 }}>
           {/* 査定コメント */}
-          {commentText && (
-            <section
-              style={{
-                borderRadius: 12,
-                border: "1px solid #e5e7eb",
-                padding: 16,
-                background: "#ffffff",
-              }}
-            >
-              <h3
-                style={{
-                  margin: "0 0 8px",
-                  fontSize: 16,
-                  fontWeight: 600,
-                }}
-              >
-                査定コメント
-              </h3>
-              <p
-                style={{
-                  margin: 0,
-                  fontSize: 14,
-                  lineHeight: 1.7,
-                  whiteSpace: "pre-wrap",
-                }}
-              >
-                {prettyOutput(commentText)}
-              </p>
-
-              <div
-                style={{
-                  marginTop: 10,
-                  fontSize: 11,
-                  color: "#6b7280",
-                  display: "flex",
-                  flexWrap: "wrap",
-                  gap: 8,
-                }}
-              >
-                {typeof confidence === "number" && (
-                  <span>信頼度：{confidence}%</span>
-                )}
-                {genre && <span>ジャンル：{genre}</span>}
-                {itemName && <span>推定名：{itemName}</span>}
-              </div>
-            </section>
-          )}
+          <section
+            style={{
+              padding: 16,
+              borderRadius: 12,
+              background: "#f9fafb",
+              border: "1px solid #e5e7eb",
+            }}
+          >
+            <h3 style={{ margin: "0 0 8px", fontSize: 16 }}>査定コメント</h3>
+            <p style={{ whiteSpace: "pre-wrap", fontSize: 14 }}>
+              {result.output_text}
+            </p>
+            <div style={{ marginTop: 8, fontSize: 12, color: "#6b7280" }}>
+              信頼度:{" "}
+              {typeof result.confidence === "number"
+                ? `${result.confidence}%`
+                : "不明"}
+              {"　"}
+              ジャンル: {result.genre ?? "不明"}
+              {"　"}
+              型名: {result.item_name ?? "不明"}
+            </div>
+          </section>
 
           {/* メルカリ用タイトル */}
-          {mercariTitle && (
-            <section
+          <section
+            style={{
+              padding: 16,
+              borderRadius: 12,
+              background: "#f9fafb",
+              border: "1px solid #e5e7eb",
+            }}
+          >
+            <div
               style={{
-                borderRadius: 12,
-                border: "1px solid #e5e7eb",
-                padding: 16,
-                background: "#ffffff",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: 8,
               }}
             >
-              <div
+              <h3 style={{ margin: 0, fontSize: 16 }}>メルカリ用タイトル</h3>
+              <button
+                type="button"
+                onClick={() => copyToClipboard(result.mercari_title)}
                 style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  marginBottom: 6,
+                  fontSize: 12,
+                  padding: "4px 8px",
+                  borderRadius: 999,
+                  border: "1px solid #e5e7eb",
+                  background: "#fff",
+                  cursor: "pointer",
                 }}
               >
-                <h3
-                  style={{
-                    margin: 0,
-                    fontSize: 15,
-                    fontWeight: 600,
-                  }}
-                >
-                  メルカリ用タイトル
-                </h3>
-                <button
-                  type="button"
-                  onClick={() => copyToClipboard(mercariTitle)}
-                  style={{
-                    fontSize: 12,
-                    padding: "4px 10px",
-                    borderRadius: 999,
-                    border: "1px solid #d1d5db",
-                    background: "#f9fafb",
-                    cursor: "pointer",
-                  }}
-                >
-                  コピー
-                </button>
-              </div>
-              <p
-                style={{
-                  margin: 0,
-                  fontSize: 14,
-                  lineHeight: 1.6,
-                  whiteSpace: "pre-wrap",
-                }}
-              >
-                {mercariTitle}
-              </p>
-            </section>
-          )}
+                コピー
+              </button>
+            </div>
+            <input
+              readOnly
+              value={result.mercari_title ?? ""}
+              style={{
+                width: "100%",
+                padding: "8px 10px",
+                borderRadius: 8,
+                border: "1px solid #d1d5db",
+                fontSize: 14,
+              }}
+            />
+          </section>
 
           {/* メルカリ用説明文 */}
-          {mercariDescription && (
-            <section
+          <section
+            style={{
+              padding: 16,
+              borderRadius: 12,
+              background: "#f9fafb",
+              border: "1px solid #e5e7eb",
+            }}
+          >
+            <div
               style={{
-                borderRadius: 12,
-                border: "1px solid #e5e7eb",
-                padding: 16,
-                background: "#ffffff",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: 8,
               }}
             >
-              <div
+              <h3 style={{ margin: 0, fontSize: 16 }}>メルカリ用説明文</h3>
+              <button
+                type="button"
+                onClick={() =>
+                  copyToClipboard(result.mercari_description)
+                }
                 style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  marginBottom: 6,
+                  fontSize: 12,
+                  padding: "4px 8px",
+                  borderRadius: 999,
+                  border: "1px solid #e5e7eb",
+                  background: "#fff",
+                  cursor: "pointer",
                 }}
               >
-                <h3
-                  style={{
-                    margin: 0,
-                    fontSize: 15,
-                    fontWeight: 600,
-                  }}
-                >
-                  メルカリ用説明文
-                </h3>
-                <button
-                  type="button"
-                  onClick={() => copyToClipboard(mercariDescription)}
-                  style={{
-                    fontSize: 12,
-                    padding: "4px 10px",
-                    borderRadius: 999,
-                    border: "1px solid #d1d5db",
-                    background: "#f9fafb",
-                    cursor: "pointer",
-                  }}
-                >
-                  コピー
-                </button>
-              </div>
-              <p
-                style={{
-                  margin: 0,
-                  fontSize: 14,
-                  lineHeight: 1.7,
-                  whiteSpace: "pre-wrap",
-                }}
-              >
-                {prettyOutput(mercariDescription)}
-              </p>
-            </section>
-          )}
-
-          {/* デバッグ用 JSON（折りたたみ） */}
-          {rawJson && (
-            <details
+                コピー
+              </button>
+            </div>
+            <textarea
+              readOnly
+              value={result.mercari_description ?? ""}
+              rows={8}
               style={{
-                marginTop: 8,
+                width: "100%",
+                padding: "8px 10px",
                 borderRadius: 8,
-                border: "1px dashed #e5e7eb",
-                padding: 8,
-                background: "#f9fafb",
+                border: "1px solid #d1d5db",
+                fontSize: 14,
+                resize: "vertical",
               }}
-            >
-              <summary style={{ fontSize: 12, cursor: "pointer" }}>
-                デバッグ用の生 JSON を表示
-              </summary>
-              <pre
-                style={{
-                  marginTop: 8,
-                  fontSize: 11,
-                  whiteSpace: "pre-wrap",
-                  overflowX: "auto",
-                }}
-              >
-                {rawJson}
-              </pre>
-            </details>
-          )}
+            />
+          </section>
         </div>
       )}
-    </form>
+    </div>
   );
 }
