@@ -2,6 +2,7 @@
 "use client";
 
 import UploadForm from "../components/UploadForm";
+import LogoutButton from "../components/LogoutButton"; // ← 追加
 
 export default function AssessPage() {
   return (
@@ -15,20 +16,27 @@ export default function AssessPage() {
         }}
       >
         <h2 style={{ margin: 0, fontSize: 20 }}>査定する</h2>
-        <span
-          id="version-badge"
-          style={{
-            fontSize: 12,
-            background: "#eef2ff",
-            color: "#3730a3",
-            padding: "4px 8px",
-            borderRadius: 999,
-            fontFamily:
-              "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
-          }}
-        >
-          v?
-        </span>
+
+        {/* 右側：バージョン + ログアウト */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span
+            id="version-badge"
+            style={{
+              fontSize: 12,
+              background: "#eef2ff",
+              color: "#3730a3",
+              padding: "4px 8px",
+              borderRadius: 999,
+              fontFamily:
+                "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+            }}
+          >
+            v?
+          </span>
+
+          {/* ログアウトボタン */}
+          <LogoutButton />
+        </div>
       </div>
 
       <p
