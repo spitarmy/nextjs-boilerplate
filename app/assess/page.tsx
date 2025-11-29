@@ -44,6 +44,11 @@ export default function AssessPage() {
         ※ 画像が大きすぎると「FUNCTION_PAYLOAD_TOO_LARGE（413）」エラーになります。
       </p>
 
+      {/* 右上にログアウトボタン */}
+          <LogoutButton />
+        </div>
+      </div>
+
       <UploadForm />
 
       <script
