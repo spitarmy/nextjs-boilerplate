@@ -1,11 +1,21 @@
 // app/page.tsx
 "use client";
 
-export default function Page() {
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
+
+export default function RootPage() {
+  const router = useRouter();
+
+  useEffect(() => {
+    // ここから /login にクライアント側でも飛ばす
+    router.replace("/login");
+  }, [router]);
+
   return (
     <main style={{ padding: 32 }}>
-      <h1>リダイレクト中...</h1>
-      <p>/login へ自動的に移動します。</p>
+      <h1>Redirecting...</h1>
+      <p>/login に移動中です。</p>
     </main>
   );
 }
