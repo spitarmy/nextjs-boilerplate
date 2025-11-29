@@ -5,7 +5,7 @@ import UploadForm from "../components/UploadForm";
 
 export default function AssessPage() {
   return (
-    <main style={{ padding: 16 }}>
+    <main style={{ padding: 16, maxWidth: 800, margin: "0 auto" }}>
       <div
         style={{
           display: "flex",
@@ -14,7 +14,7 @@ export default function AssessPage() {
           marginBottom: 10,
         }}
       >
-        <h2 style={{ margin: 0, fontSize: 18 }}>査定する</h2>
+        <h2 style={{ margin: 0, fontSize: 20 }}>査定する</h2>
         <span
           id="version-badge"
           style={{
@@ -31,6 +31,19 @@ export default function AssessPage() {
         </span>
       </div>
 
+      <p
+        style={{
+          fontSize: 12,
+          color: "#4b5563",
+          marginBottom: 12,
+          lineHeight: 1.5,
+        }}
+      >
+        ※ 最大 <b>3枚</b> までアップロードできます。長辺 1024px 程度・JPEG 推奨。
+        <br />
+        ※ 画像が大きすぎると「FUNCTION_PAYLOAD_TOO_LARGE（413）」エラーになります。
+      </p>
+
       <UploadForm />
 
       <script
@@ -40,8 +53,9 @@ export default function AssessPage() {
               try{
                 const r = await fetch('/api/version');
                 const j = await r.json();
-                document.getElementById('version-badge').textContent =
-                  (j.ok ? j.version : 'v?');
+                var el = document.getElementById('version-badge');
+                if (!el) return;
+                el.textContent = j.ok && j.version ? j.version : 'v?';
               }catch(e){}
             })();
           `,
