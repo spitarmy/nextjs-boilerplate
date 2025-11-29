@@ -1,13 +1,11 @@
 // middleware.ts
-import type { NextRequest } from "next/server";
-import { NextResponse } from "next/server";
 
-// 今は何もしないミドルウェア
-export function middleware(_req: NextRequest) {
+import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
+
+// 何もしないで、そのまま次の処理へ進ませる
+export function middleware(_request: NextRequest) {
   return NextResponse.next();
 }
 
-// どのパスにもマッチさせない
-export const config = {
-  matcher: [],
-};
+// （config が書いてあっても消してOK / 残っていても動きは同じです）
