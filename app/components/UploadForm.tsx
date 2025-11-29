@@ -5,19 +5,19 @@ import React, { useState, FormEvent, ChangeEvent } from "react";
 
 type AssessResponse = {
   ok?: boolean;
-  output_text?: string;            // 日本語の査定コメント
-  mercari_title?: string;          // メルカリ用タイトル
-  mercari_description?: string;    // メルカリ用説明文
-  confidence?: number;             // 信頼度（％）
-  genre?: string;                  // 自動ジャンル
-  item_name?: string;              // 推定商品名
+  output_text?: string;            // ここに ```json ...``` が入ってくることがある
+  mercari_title?: string;
+  mercari_description?: string;
+  confidence?: number;
+  genre?: string;
+  item_name?: string;
   error?: string;
   [key: string]: any;
 };
 
 const MAX_FILES = 3;
-const MAX_FILE_SIZE_MB = 1.1;      // 1枚あたりの目安
-const MAX_TOTAL_SIZE_MB = 2.8;     // 全体のざっくり上限
+const MAX_FILE_SIZE_MB = 1.1;
+const MAX_TOTAL_SIZE_MB = 2.8;
 
 async function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -26,6 +26,42 @@ async function fileToDataUrl(file: File): Promise<string> {
     reader.onerror = (e) => reject(e);
     reader.readAsDataURL(file);
   });
+}
+
+/**
+ * ```json\n{ ... }\n``` みたいな文字列から JSON オブジェクトを取り出す
+ */
+function parseEmbeddedJson(raw?: string): any | null {
+  if (!raw) return null;
+  try {
+    // 最初の { と最後の } を探して、その間だけを JSON としてパース
+    const start = raw.indexOf("{");
+    const end = raw.lastIndexOf("}");
+    if (start === -1 || end === -1 || end <= start) return null;
+    const jsonText = raw.slice(start, end + 1);
+    return JSON.parse(jsonText);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * ```json や ``` などコードフェンスを軽く取り除く
+ */
+function stripCodeFence(text: string): string {
+  if (!text) return "";
+  let t = text.trim();
+  if (t.startsWith("```")) {
+    // 最初の改行まで飛ばす
+    const firstNewline = t.indexOf("\n");
+    if (firstNewline !== -1) {
+      t = t.slice(firstNewline + 1);
+    }
+  }
+  if (t.endsWith("```")) {
+    t = t.slice(0, t.lastIndexOf("```"));
+  }
+  return t.trim();
 }
 
 export default function UploadForm() {
@@ -45,11 +81,9 @@ export default function UploadForm() {
     const selected = list.slice(0, MAX_FILES);
     setFiles(selected);
 
-    // プレビューURL
     const urls = selected.map((f) => URL.createObjectURL(f));
     setPreviewUrls(urls);
 
-    // サイズチェック
     if (selected.length) {
       const perErrors: string[] = [];
       let totalSize = 0;
@@ -89,7 +123,6 @@ export default function UploadForm() {
 
     setLoading(true);
     try {
-      // 複数画像を dataURL に変換
       const dataUrls: string[] = [];
       for (const f of files) {
         dataUrls.push(await fileToDataUrl(f));
@@ -143,8 +176,32 @@ export default function UploadForm() {
     }
   };
 
-  const prettyOutput = (text?: string) =>
-    (text ?? "").replace(/\\n/g, "\n");
+  const prettyOutput = (text?: string) => (text ?? "").replace(/\\n/g, "\n");
+
+  // ====== ここから「表示用データの整形」 ======
+
+  const embedded = parseEmbeddedJson(result?.output_text);
+
+  const commentText: string | undefined =
+    embedded?.output_text ??
+    embedded?.comment ??
+    (result?.output_text ? stripCodeFence(result.output_text) : undefined);
+
+  const mercariTitle: string | undefined =
+    embedded?.mercari_title ?? result?.mercari_title;
+
+  const mercariDescription: string | undefined =
+    embedded?.mercari_description ?? result?.mercari_description;
+
+  const confidence: number | undefined =
+    typeof embedded?.confidence === "number"
+      ? embedded.confidence
+      : result?.confidence;
+
+  const genre: string | undefined = embedded?.genre ?? result?.genre;
+  const itemName: string | undefined = embedded?.item_name ?? result?.item_name;
+
+  // =========================================
 
   return (
     <form onSubmit={handleSubmit}>
@@ -182,7 +239,7 @@ export default function UploadForm() {
         </div>
       </div>
 
-      {/* プレビュー（複数） */}
+      {/* プレビュー */}
       {previewUrls.length > 0 && (
         <div
           style={{
@@ -235,7 +292,7 @@ export default function UploadForm() {
         {loading ? "AI査定中…" : "AI査定開始"}
       </button>
 
-      {/* エラー表示 */}
+      {/* エラー */}
       {error && (
         <div
           style={{
@@ -252,11 +309,11 @@ export default function UploadForm() {
         </div>
       )}
 
-      {/* 結果表示 */}
+      {/* 結果 */}
       {result && !error && (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           {/* 査定コメント */}
-          {result.output_text && (
+          {commentText && (
             <section
               style={{
                 borderRadius: 12,
@@ -282,7 +339,7 @@ export default function UploadForm() {
                   whiteSpace: "pre-wrap",
                 }}
               >
-                {prettyOutput(result.output_text)}
+                {prettyOutput(commentText)}
               </p>
 
               <div
@@ -295,17 +352,17 @@ export default function UploadForm() {
                   gap: 8,
                 }}
               >
-                {typeof result.confidence === "number" && (
-                  <span>信頼度：{result.confidence}%</span>
+                {typeof confidence === "number" && (
+                  <span>信頼度：{confidence}%</span>
                 )}
-                {result.genre && <span>ジャンル：{result.genre}</span>}
-                {result.item_name && <span>推定名：{result.item_name}</span>}
+                {genre && <span>ジャンル：{genre}</span>}
+                {itemName && <span>推定名：{itemName}</span>}
               </div>
             </section>
           )}
 
           {/* メルカリ用タイトル */}
-          {result.mercari_title && (
+          {mercariTitle && (
             <section
               style={{
                 borderRadius: 12,
@@ -333,7 +390,7 @@ export default function UploadForm() {
                 </h3>
                 <button
                   type="button"
-                  onClick={() => copyToClipboard(result.mercari_title)}
+                  onClick={() => copyToClipboard(mercariTitle)}
                   style={{
                     fontSize: 12,
                     padding: "4px 10px",
@@ -354,13 +411,13 @@ export default function UploadForm() {
                   whiteSpace: "pre-wrap",
                 }}
               >
-                {result.mercari_title}
+                {mercariTitle}
               </p>
             </section>
           )}
 
           {/* メルカリ用説明文 */}
-          {result.mercari_description && (
+          {mercariDescription && (
             <section
               style={{
                 borderRadius: 12,
@@ -388,9 +445,7 @@ export default function UploadForm() {
                 </h3>
                 <button
                   type="button"
-                  onClick={() =>
-                    copyToClipboard(result.mercari_description)
-                  }
+                  onClick={() => copyToClipboard(mercariDescription)}
                   style={{
                     fontSize: 12,
                     padding: "4px 10px",
@@ -411,12 +466,12 @@ export default function UploadForm() {
                   whiteSpace: "pre-wrap",
                 }}
               >
-                {prettyOutput(result.mercari_description)}
+                {prettyOutput(mercariDescription)}
               </p>
             </section>
           )}
 
-          {/* デバッグ用 JSON */}
+          {/* デバッグ用 JSON（折りたたみ） */}
           {rawJson && (
             <details
               style={{
