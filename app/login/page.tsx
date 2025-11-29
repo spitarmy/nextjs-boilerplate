@@ -7,20 +7,19 @@ import { supabase } from "../../lib/supabase";
 
 export default function LoginPage() {
   const router = useRouter();
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // すでにログイン済みなら / に戻す
+  // すでにログイン済みならトップではなく /assess へ
   useEffect(() => {
-    const check = async () => {
-      const { data } = await supabase.auth.getSession();
-      if (data.session) {
-        router.replace("/");
-      }
-    };
-    check();
+    if (typeof window === "undefined") return;
+    const loggedIn = window.localStorage.getItem("kanteno_logged_in");
+    if (loggedIn === "true") {
+      router.replace("/assess");
+    }
   }, [router]);
 
   const handleSubmit = async (e: FormEvent) => {
@@ -28,100 +27,110 @@ export default function LoginPage() {
     setError(null);
     setLoading(true);
 
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
 
-    setLoading(false);
+      if (error) {
+        console.error("supabase login error", error);
+        setError(error.message || "ログインに失敗しました");
+        return;
+      }
 
-    if (error) {
-      setError(error.message);
-      return;
+      if (!data.session) {
+        // まれにセッションが返らないケース用
+        setError("セッションを開始できませんでした");
+        return;
+      }
+
+      // ログインフラグをローカル保存
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem("kanteno_logged_in", "true");
+      }
+
+      // ログインに成功したので査定ページへ
+      router.replace("/assess");
+    } finally {
+      setLoading(false);
     }
-
-    // ログイン成功 → トップへ
-    router.replace("/");
   };
 
   return (
-    <main style={{ padding: 32 }}>
+    <main
+      style={{
+        minHeight: "100vh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        backgroundColor: "#f5f5f5",
+      }}
+    >
       <div
         style={{
+          width: "100%",
           maxWidth: 420,
-          margin: "40px auto",
-          padding: "32px 28px",
+          backgroundColor: "#fff",
+          padding: 32,
           borderRadius: 12,
-          border: "1px solid #eee",
-          boxShadow: "0 8px 20px rgba(15, 23, 42, 0.06)",
-          background: "#fff",
+          boxShadow: "0 10px 25px rgba(0,0,0,0.08)",
         }}
       >
-        {/* ここを「カンテの ログイン」に変更済み */}
-        <h1
-          style={{
-            fontSize: 24,
-            fontWeight: 700,
-            marginBottom: 4,
-          }}
-        >
+        <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 8 }}>
           カンテノ ログイン
         </h1>
-        <p
-          style={{
-            fontSize: 13,
-            color: "#64748b",
-            marginBottom: 24,
-          }}
-        >
+        <p style={{ fontSize: 13, color: "#555", marginBottom: 24 }}>
           管理者から発行されたアカウントでログインしてください。
         </p>
 
-        <form
-          onSubmit={handleSubmit}
-          style={{ display: "grid", gap: 16 }}
-        >
-          <label style={{ fontSize: 13 }}>
+        <form onSubmit={handleSubmit}>
+          <label
+            style={{ display: "block", fontSize: 13, marginBottom: 4 }}
+            htmlFor="email"
+          >
             メールアドレス
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-              style={{
-                width: "100%",
-                marginTop: 4,
-                padding: "8px 10px",
-                borderRadius: 8,
-                border: "1px solid #cbd5e1",
-              }}
-            />
           </label>
+          <input
+            id="email"
+            type="email"
+            required
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            style={{
+              width: "100%",
+              padding: "10px 12px",
+              borderRadius: 6,
+              border: "1px solid #ccc",
+              marginBottom: 16,
+              fontSize: 14,
+            }}
+          />
 
-          <label style={{ fontSize: 13 }}>
+          <label
+            style={{ display: "block", fontSize: 13, marginBottom: 4 }}
+            htmlFor="password"
+          >
             パスワード
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              style={{
-                width: "100%",
-                marginTop: 4,
-                padding: "8px 10px",
-                borderRadius: 8,
-                border: "1px solid #cbd5e1",
-              }}
-            />
           </label>
+          <input
+            id="password"
+            type="password"
+            required
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            style={{
+              width: "100%",
+              padding: "10px 12px",
+              borderRadius: 6,
+              border: "1px solid #ccc",
+              marginBottom: 16,
+              fontSize: 14,
+            }}
+          />
 
           {error && (
-            <p
-              style={{
-                fontSize: 12,
-                color: "#b91c1c",
-              }}
-            >
+            <p style={{ color: "crimson", fontSize: 12, marginBottom: 12 }}>
               {error}
             </p>
           )}
@@ -130,19 +139,18 @@ export default function LoginPage() {
             type="submit"
             disabled={loading}
             style={{
-              marginTop: 8,
               width: "100%",
               padding: "10px 0",
-              borderRadius: 9999,
+              borderRadius: 999,
               border: "none",
-              background: "#2563eb",
-              color: "#fff",
+              fontSize: 15,
               fontWeight: 600,
-              cursor: "pointer",
-              opacity: loading ? 0.7 : 1,
+              color: "#fff",
+              backgroundColor: loading ? "#7aa7ff" : "#2563eb",
+              cursor: loading ? "default" : "pointer",
             }}
           >
-            {loading ? "ログイン中..." : "ログイン"}
+            {loading ? "ログイン中…" : "ログイン"}
           </button>
         </form>
       </div>
