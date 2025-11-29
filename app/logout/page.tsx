@@ -10,25 +10,14 @@ export default function LogoutPage() {
 
   useEffect(() => {
     const run = async () => {
-      try {
-        await supabase.auth.signOut();
-      } catch (e) {
-        console.error(e);
-      }
-
+      await supabase.auth.signOut();
       if (typeof window !== "undefined") {
         window.localStorage.removeItem("kanteno_logged_in");
       }
-
       router.replace("/login");
     };
-
     run();
   }, [router]);
 
-  return (
-    <main style={{ padding: 16 }}>
-      <p>ログアウト中です…</p>
-    </main>
-  );
+  return null;
 }
