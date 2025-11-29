@@ -52,7 +52,7 @@ const SYSTEM_PROMPT = [
   "【JSONフォーマット】",
   '必ず以下の形式の JSON 文字列のみを返す：',
   '{"output_text":"社内用コメント","mercari_title":"タイトル","mercari_description":"説明文","confidence":90,"genre":"ジャンル","item_name":"商品名"}'
-].join("\\n");
+].join("\n");
 
 export async function POST(req: NextRequest) {
   try {
@@ -74,7 +74,6 @@ export async function POST(req: NextRequest) {
 
     // いろんな形で来ても頑張って画像の配列にそろえる
     const raw = (body as any).image_urls ?? (body as any).images ?? null;
-
     let images: string[] = [];
 
     if (Array.isArray(raw)) {
@@ -195,7 +194,7 @@ export async function POST(req: NextRequest) {
 
     const referenceText = referenceBlocks.join("\n\n");
 
-    // OpenAI に渡す content を組み立てる（※ここでだけ content を定義）
+    // OpenAI に渡す content を組み立てる
     const content: any[] = [
       {
         type: "input_text",
@@ -264,27 +263,45 @@ export async function POST(req: NextRequest) {
 
     const output_text =
       typeof parsed.output_text === "string" ? parsed.output_text : String(text);
-    const mercari_title =
+
+    // ★ item_name を先に整形
+    const item_name: string | null =
+      typeof parsed.item_name === "string" && parsed.item_name.trim().length > 0
+        ? parsed.item_name.trim()
+        : null;
+
+    // ★ mercari_title は let にして後で書き換え可能にする
+    let mercari_title: string =
       typeof parsed.mercari_title === "string"
         ? parsed.mercari_title
         : "【仮】カンテノ自動査定";
-    const mercari_description =
+
+    const mercari_description: string =
       typeof parsed.mercari_description === "string"
         ? parsed.mercari_description
         : output_text;
 
-    const confidence =
+    const confidence: number | null =
       typeof parsed.confidence === "number" ? parsed.confidence : null;
 
-    const genre =
+    const genre: string | null =
       typeof parsed.genre === "string" && parsed.genre.trim().length > 0
-        ? parsed.genre
+        ? parsed.genre.trim()
         : null;
 
-    const item_name =
-      typeof parsed.item_name === "string" && parsed.item_name.trim().length > 0
-        ? parsed.item_name
-        : null;
+    // ＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊
+    // ① 型名(item_name)をタイトルに必ず含める
+    // ＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊
+    if (item_name && !mercari_title.includes(item_name)) {
+      mercari_title = `${mercari_title} ${item_name}`.trim();
+    }
+
+    // ＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊
+    // ② ざっくり40文字以内にトリム（全角1文字=1扱い）
+    // ＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊
+    if (mercari_title.length > 40) {
+      mercari_title = mercari_title.slice(0, 40);
+    }
 
     // ＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊
     // confidence 90%以上を training_items に自動インサート
