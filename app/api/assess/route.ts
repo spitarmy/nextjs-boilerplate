@@ -51,7 +51,7 @@ export async function POST(req: NextRequest) {
     }
 
     // 画像を抽出
-    const raw = body.image_urls ?? body.images ?? null;
+    const raw = (body as any).image_urls ?? (body as any).images ?? null;
     let images: string[] = [];
 
     if (Array.isArray(raw)) {
@@ -73,7 +73,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // ===== Supabase リファレンス収集（省略なし）=====
+    // ===== Supabase リファレンス収集 =====
     let referenceBlocks: string[] = [];
 
     try {
@@ -172,7 +172,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // ===== ★★ JSONパースの安定化処理（重要）★★ =====
+    // ===== JSONパースの安定化処理 =====
     const cleaned = rawText
       .replace(/```json/gi, "")
       .replace(/```/g, "")
@@ -199,9 +199,7 @@ export async function POST(req: NextRequest) {
       typeof parsed.item_name === "string" ? parsed.item_name.trim() : null;
 
     let mercari_title =
-      typeof parsed.mercari_title === "string"
-        ? parsed.mercari_title
-        : "";
+      typeof parsed.mercari_title === "string" ? parsed.mercari_title : "";
 
     if (item_name && !mercari_title.includes(item_name)) {
       mercari_title = `${mercari_title} ${item_name}`.trim();
@@ -221,6 +219,38 @@ export async function POST(req: NextRequest) {
 
     const genre: string | null =
       typeof parsed.genre === "string" ? parsed.genre.trim() : null;
+
+    // ===== 査定履歴(appraisals)に1件保存 =====
+    try {
+      const userId = (body as any).user_id ?? null;
+
+      if (userId) {
+        const { error: appraiseInsertError } = await supabase
+          .from("appraisals")
+          .insert([
+            {
+              user_id: userId,
+              image_urls: images,
+              output_text,
+              mercari_title,
+              mercari_description,
+              confidence,
+              genre,
+              item_name,
+              model: "gpt-4.1",
+            },
+          ]);
+
+        if (appraiseInsertError) {
+          console.error("appraisals への保存に失敗:", appraiseInsertError);
+        }
+      } else {
+        console.warn("user_id が無いため appraisals には保存しませんでした。");
+      }
+    } catch (e) {
+      console.error("appraisals 保存中の例外:", e);
+      // ここはログだけ。査定レスポンスは返す。
+    }
 
     // ===== 高信頼度 → training_items 自動登録 =====
     if (confidence !== null && confidence >= 90) {
