@@ -17,11 +17,11 @@ type AssessResponse = {
 
 const MAX_FILES = 3;
 
-// ★ 元画像の容量制限をゆるくする
+// 元画像の容量制限（かなりゆるめ）
 const MAX_ORIGINAL_SIZE_PER_FILE = 10 * 1024 * 1024; // 10MB/枚
 const MAX_ORIGINAL_TOTAL_SIZE = 25 * 1024 * 1024;    // 3枚合計 25MB
 
-// ★ 圧縮後の長辺 800px
+// 圧縮後の長辺ピクセル
 const MAX_LONG_SIDE = 800;
 
 async function fileToCompressedDataUrl(file: File): Promise<string> {
@@ -90,19 +90,23 @@ export default function UploadForm() {
       return;
     }
 
-    // ★ ゆるい容量チェック（元画像）
+    // 元画像の容量チェック
     let totalSize = 0;
     for (const f of files) {
       totalSize += f.size;
 
       if (f.size > MAX_ORIGINAL_SIZE_PER_FILE) {
-        setErrorMsg("元の画像ファイルの容量が大きすぎます（10MB超）。解像度を下げてください。");
+        setErrorMsg(
+          "元の画像ファイルの容量が大きすぎます（10MB超）。解像度を下げてからお試しください。"
+        );
         return;
       }
     }
 
     if (totalSize > MAX_ORIGINAL_TOTAL_SIZE) {
-      setErrorMsg("画像の合計容量が大きすぎます（25MB超）。枚数を減らすか解像度を下げてください。");
+      setErrorMsg(
+        "画像の合計容量が大きすぎます（25MB超）。枚数を減らすか解像度を下げてください。"
+      );
       return;
     }
 
@@ -124,7 +128,9 @@ export default function UploadForm() {
 
       const json: AssessResponse = await res.json();
       if (!res.ok || !json.ok) {
-        setErrorMsg(json.error || "査定に失敗しました。時間をおいて再度お試しください。");
+        setErrorMsg(
+          json.error || "査定に失敗しました。時間をおいて再度お試しください。"
+        );
       } else {
         setResult(json);
       }
@@ -284,7 +290,7 @@ export default function UploadForm() {
               padding: 16,
               borderRadius: 12,
               background: "#f9fafb",
-              border: "1px solid "#e5e7eb",
+              border: "1px solid #e5e7eb",
             }}
           >
             <div
