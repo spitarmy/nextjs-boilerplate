@@ -220,42 +220,41 @@ export async function POST(req: NextRequest) {
     const genre: string | null =
       typeof parsed.genre === "string" ? parsed.genre.trim() : null;
 
-    // ===== 査定履歴(appraisals)に1件保存 =====
+    // ===== 査定履歴(appraisals)に毎回保存 =====
     try {
       const userId = (body as any).user_id ?? null;
 
-      if (userId) {
-        const { error: appraiseInsertError } = await supabase
-          .from("appraisals")
-          .insert([
-            {
-              user_id: userId,
-              image_urls: images,
-              output_text,
-              mercari_title,
-              mercari_description,
-              confidence,
-              genre,
-              item_name,
-              model: "gpt-4.1",
-            },
-          ]);
+      const { error: appraiseInsertError } = await supabase
+        .from("appraisals")
+        .insert([
+          {
+            user_id: userId, // null も許容
+            image_urls: images,
+            output_text,
+            mercari_title,
+            mercari_description,
+            confidence,
+            genre,
+            item_name,
+            model: "gpt-4.1",
+          },
+        ]);
 
-        if (appraiseInsertError) {
-          console.error("appraisals への保存に失敗:", appraiseInsertError);
-        }
-      } else {
-        console.warn("user_id が無いため appraisals には保存しませんでした。");
+      if (appraiseInsertError) {
+        console.error("appraisals への保存に失敗:", appraiseInsertError);
       }
     } catch (e) {
       console.error("appraisals 保存中の例外:", e);
-      // ここはログだけ。査定レスポンスは返す。
+      // ここはログだけ。レスポンスは返す。
     }
 
-    // ===== 高信頼度 → training_items 自動登録 =====
-    if (confidence !== null && confidence >= 90) {
-      try {
-        await supabase.from("training_items").insert([
+    // ===== training_items にも毎回保存（is_trainable だけ分ける） =====
+    try {
+      const isTrainable = confidence !== null && confidence >= 90;
+
+      const { error: trainingInsertError } = await supabase
+        .from("training_items")
+        .insert([
           {
             genre,
             item_name,
@@ -266,14 +265,17 @@ export async function POST(req: NextRequest) {
             model: "gpt-4.1",
             source: "kanteno-web",
             confidence,
-            is_trainable: true,
+            is_trainable: isTrainable,
             raw_request: { image_urls: images },
             raw_response: aiRes,
           },
         ]);
-      } catch (e) {
-        console.error("training_items 自動登録エラー:", e);
+
+      if (trainingInsertError) {
+        console.error("training_items への保存に失敗:", trainingInsertError);
       }
+    } catch (e) {
+      console.error("training_items 保存中の例外:", e);
     }
 
     return NextResponse.json(
