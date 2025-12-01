@@ -10,7 +10,7 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// ★ フォーマット固定＋コードブロック禁止＋タイトル強化
+// ★ フォーマット固定＋コードブロック禁止
 const SYSTEM_PROMPT = [
   "あなたは骨董・ブランド・和装・雑貨・おもちゃ・時計・家電など幅広い商品を査定するAIです。",
   "画像からブランド名・カテゴリ・型名・状態を分析し、JSON形式で返答します。",
@@ -26,26 +26,15 @@ const SYSTEM_PROMPT = [
   "・1〜5行のみ。",
   "・原則として次の4行構成にする：",
   "　1行目：【真贋】〜",
-  "　2行目：【型名】〜（型番・モデル名が分かれば必ずここに入れる）",
+  "　2行目：【型名】〜",
   "　3行目：【状態】〜",
   "　4行目：【想定相場】◯◯,◯◯◯〜◯◯,◯◯◯円前後（◯◯基準）",
   "・相場が不明な場合でも、4行目は【想定相場】不明（データ不足）という形式で必ず1行出す。",
   "・価格はフリマアプリの『実際に売れた価格帯』を基準にし、やや控えめ（相場の下限〜中間）にする。",
   "・買取店の店頭価格や定価は参考にしない。",
   "",
-  "【mercari_title（40文字以内・売れるタイトル）】",
-  "・基本構成：『ブランド名 型番/モデル名 アイテム名 主要特徴』。",
-  "・型番やモデル名が推定できる場合は、必ずタイトルの中に含める（例：TS-77NC, PSP-2000 など）。",
-  "・同じ単語を2回以上繰り返さない（ブランド名やアイテム名の重複は避ける）。",
-  "・40文字を超えそうな場合は、『ブランド名 + 型番/モデル名 + アイテム名 + 重要な特徴1つ』を優先し、不要な形容詞は削る。",
-  "",
-  "【mercari_description（200〜400文字）】",
-  "① 商品概要",
-  "② 状態説明",
-  "③ サイズ感・付属品",
-  "④ 注意事項",
-  "⑤ 検索タグ（1行）",
-  "・金額は書かない。",
+  "【mercari_title】40文字以内。",
+  "【mercari_description】200〜400文字。金額は禁止。",
   "",
   "【禁止事項】",
   "・査定・AI・内部情報について本文に書かない。",
@@ -236,49 +225,34 @@ export async function POST(req: NextRequest) {
     const item_name: string | null =
       typeof parsed.item_name === "string" ? parsed.item_name.trim() : null;
 
-    // ★ メルカリタイトルの強化ロジック
-    const rawTitle =
-      typeof parsed.mercari_title === "string"
-        ? parsed.mercari_title.trim()
-        : "";
+    let mercari_title: string =
+      typeof parsed.mercari_title === "string" ? parsed.mercari_title : "";
 
-    let mercari_title = rawTitle;
-
-    // 型名があるのにタイトルに入っていなければ必ず入れる
-    if (item_name) {
-      if (!mercari_title) {
-        mercari_title = item_name;
-      } else if (!mercari_title.includes(item_name)) {
-        mercari_title = `${mercari_title} ${item_name}`.trim();
-      }
+    // 型名は必ず含める
+    if (item_name && !mercari_title.includes(item_name)) {
+      mercari_title = `${mercari_title} ${item_name}`.trim();
     }
 
-    // 単語の重複をざっくり除去（同じワードを連発しない）
+    // ★ タイトル内の重複ワードを削除（同じ単語を何度も書かない）
     if (mercari_title) {
-      const tokens: string[] = mercari_title.split(/\s+/);
+      const tokens: string[] = mercari_title.split(/[\s　]+/);
       const seen = new Set<string>();
-      mercari_title = tokens
-        .filter((t: string) => {
-          const key = t.trim();
-          if (!key) return false;
-          if (seen.has(key)) return false;
-          seen.add(key);
-          return true;
-        })
-        .join(" ");
+      const deduped = tokens.filter((t: string) => {
+        const key = t.trim();
+        if (!key) return false;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      mercari_title = deduped.join(" ");
     }
 
-    // それでも空なら最後の保険
-    if (!mercari_title) {
-      mercari_title = item_name ?? "商品タイトル未設定";
-    }
-
-    // 40文字以内にトリム
+    // 40文字にトリム
     if (mercari_title.length > 40) {
       mercari_title = mercari_title.slice(0, 40);
     }
 
-    const mercari_description =
+    const mercari_description: string =
       typeof parsed.mercari_description === "string"
         ? parsed.mercari_description
         : output_text;
