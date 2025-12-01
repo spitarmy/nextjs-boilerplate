@@ -255,10 +255,10 @@ export async function POST(req: NextRequest) {
 
     // 単語の重複をざっくり除去（同じワードを連発しない）
     if (mercari_title) {
-      const tokens = mercari_title.split(/\s+/);
+      const tokens: string[] = mercari_title.split(/\s+/);
       const seen = new Set<string>();
       mercari_title = tokens
-        .filter((t) => {
+        .filter((t: string) => {
           const key = t.trim();
           if (!key) return false;
           if (seen.has(key)) return false;
@@ -306,7 +306,6 @@ export async function POST(req: NextRequest) {
       ]);
     } catch (e) {
       console.error("appraisals 保存中の例外:", e);
-      // ここはログだけ。エラーでもユーザーには結果を返す。
     }
 
     // ===== training_items にも毎回保存（is_trainable だけ分ける） =====
