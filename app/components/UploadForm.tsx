@@ -2,8 +2,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { supabase } from "../../lib/supabase"; // すでにあれば重複NG
-
+import { supabase } from "../../lib/supabase";
 
 type AssessResponse = {
   ok: boolean;
@@ -17,11 +16,15 @@ type AssessResponse = {
 };
 
 const MAX_FILES = 3;
-const MAX_FILE_SIZE = 2 * 1024 * 1024; // 2MB/枚 目安
-const MAX_LONG_SIDE = 800; // px
+
+// ★ 元画像の容量制限をゆるくする
+const MAX_ORIGINAL_SIZE_PER_FILE = 10 * 1024 * 1024; // 10MB/枚
+const MAX_ORIGINAL_TOTAL_SIZE = 25 * 1024 * 1024;    // 3枚合計 25MB
+
+// ★ 圧縮後の長辺 800px
+const MAX_LONG_SIDE = 800;
 
 async function fileToCompressedDataUrl(file: File): Promise<string> {
-  // 画像を読み込んでリサイズ & JPEG に圧縮
   const img = document.createElement("img");
   const url = URL.createObjectURL(file);
 
@@ -44,7 +47,6 @@ async function fileToCompressedDataUrl(file: File): Promise<string> {
   canvas.height = height;
   ctx.drawImage(img, 0, 0, width, height);
 
-  // 0.7くらいの品質でJPEG圧縮
   const dataUrl = canvas.toDataURL("image/jpeg", 0.7);
   URL.revokeObjectURL(url);
   return dataUrl;
@@ -56,7 +58,6 @@ export default function UploadForm() {
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // ★ ユーザーID保持
   const [userId, setUserId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -89,12 +90,20 @@ export default function UploadForm() {
       return;
     }
 
-    // サイズチェック（かなりざっくり）
+    // ★ ゆるい容量チェック（元画像）
+    let totalSize = 0;
     for (const f of files) {
-      if (f.size > MAX_FILE_SIZE * 3) {
-        setErrorMsg("画像サイズが大きすぎます。もう少し解像度を下げてください。");
+      totalSize += f.size;
+
+      if (f.size > MAX_ORIGINAL_SIZE_PER_FILE) {
+        setErrorMsg("元の画像ファイルの容量が大きすぎます（10MB超）。解像度を下げてください。");
         return;
       }
+    }
+
+    if (totalSize > MAX_ORIGINAL_TOTAL_SIZE) {
+      setErrorMsg("画像の合計容量が大きすぎます（25MB超）。枚数を減らすか解像度を下げてください。");
+      return;
     }
 
     setLoading(true);
@@ -110,7 +119,7 @@ export default function UploadForm() {
       const res = await fetch("/api/assess", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image_urls: imageUrls,user_id: userId, }),
+        body: JSON.stringify({ image_urls: imageUrls, user_id: userId }),
       });
 
       const json: AssessResponse = await res.json();
@@ -133,7 +142,6 @@ export default function UploadForm() {
       await navigator.clipboard.writeText(text);
       alert("コピーしました");
     } catch {
-      // clipboard API が使えない環境用フォールバックは省略
       alert("コピーに失敗しました。手動で選択してコピーしてください。");
     }
   };
@@ -150,7 +158,7 @@ export default function UploadForm() {
           />
         </div>
         <div style={{ fontSize: 12, color: "#555", marginBottom: 12 }}>
-          ※ 最大 {MAX_FILES} 枚まで選択可能。長辺 1024px に圧縮して送信します。
+          ※ 最大 {MAX_FILES} 枚まで選択可能。長辺 800px に圧縮して送信します。
         </div>
 
         {files.length > 0 && (
@@ -276,7 +284,7 @@ export default function UploadForm() {
               padding: 16,
               borderRadius: 12,
               background: "#f9fafb",
-              border: "1px solid #e5e7eb",
+              border: "1px solid "#e5e7eb",
             }}
           >
             <div
@@ -290,9 +298,7 @@ export default function UploadForm() {
               <h3 style={{ margin: 0, fontSize: 16 }}>メルカリ用説明文</h3>
               <button
                 type="button"
-                onClick={() =>
-                  copyToClipboard(result.mercari_description)
-                }
+                onClick={() => copyToClipboard(result.mercari_description)}
                 style={{
                   fontSize: 12,
                   padding: "4px 8px",
