@@ -44,6 +44,14 @@ const SYSTEM_PROMPT = [
   '{"output_text":"〜","mercari_title":"〜","mercari_description":"〜","confidence":90,"genre":"〜","item_name":"〜"}'
 ].join("\n");
 
+// ===== タイトル用トークン化ヘルパー =====
+function tokenizeForTitle(s: string): string[] {
+  return s
+    .split(/[()\[\]【】「」『』／\/・、,\s　]+/)
+    .map((w) => w.trim())
+    .filter(Boolean);
+}
+
 // ===== メルカリタイトル最適化ヘルパー =====
 function buildMercariTitle(
   rawTitle: unknown,
@@ -56,27 +64,24 @@ function buildMercariTitle(
 
   // ベースは「型名があれば item_name、なければ元タイトル」
   let base = baseName || originalTitle;
-
   if (!base) return "";
 
-  // ベースに含まれている単語セット
-  const baseWords = base
-    .split(/[\s　]+/)
-    .map((w) => w.trim())
-    .filter(Boolean);
+  // ベースに含まれている単語セット（記号でしっかり分割）
+  const baseWords = tokenizeForTitle(base);
   const wordsInBase = new Set<string>(baseWords);
 
-  // 元タイトルから「ベースに無い＋重複していない」単語だけ追加候補にする
+  // 元タイトルから「ベースに無い＋重複していない」単語だけ追加
   const extraWords: string[] = [];
   const seen = new Set<string>();
 
   if (originalTitle) {
-    const tokens: string[] = originalTitle.split(/[\s　]+/);
+    const tokens: string[] = tokenizeForTitle(originalTitle);
     tokens.forEach((t: string) => {
       const key = t.trim();
       if (!key) return;
-      if (wordsInBase.has(key)) return;
-      if (seen.has(key)) return;
+      if (wordsInBase.has(key)) return;    // 既にベースにある
+      if (base.includes(key)) return;      // 文字列として含まれている
+      if (seen.has(key)) return;           // 既に追加予定
       seen.add(key);
       extraWords.push(key);
     });
@@ -101,9 +106,14 @@ function buildMercariTitle(
 
   // タイトル組み立て：ベース + extra + hints
   let title = base;
-
   const tailParts: string[] = [];
-  extraWords.forEach((w) => tailParts.push(w));
+
+  extraWords.forEach((w) => {
+    if (!title.includes(w) && !tailParts.includes(w)) {
+      tailParts.push(w);
+    }
+  });
+
   hints.forEach((h) => {
     if (!title.includes(h) && !tailParts.includes(h)) {
       tailParts.push(h);
@@ -114,7 +124,7 @@ function buildMercariTitle(
     title = `${title} ${tailParts.join(" ")}`.trim();
   }
 
-  // 最後に40文字でカット
+  // ★ 重複しないことを優先：長さを無理に40文字に近づけない
   if (title.length > 40) {
     title = title.slice(0, 40);
   }
@@ -139,7 +149,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // フロントから送られてきた user_id（ログインユーザー）
     const user_id: string | null =
       typeof (body as any).user_id === "string" &&
       (body as any).user_id.trim().length > 0
@@ -287,13 +296,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // ===== パース結果を抽出 =====
     const output_text_raw =
       typeof parsed.output_text === "string"
         ? parsed.output_text
         : String(rawText);
 
-    // 万一【想定相場】が入っていなかったらサーバー側で 1 行足す
     let output_text = output_text_raw;
     if (!output_text.includes("【想定相場】")) {
       const sep = output_text.endsWith("\n") ? "" : "\n";
@@ -303,8 +310,8 @@ export async function POST(req: NextRequest) {
     const item_name: string | null =
       typeof parsed.item_name === "string" ? parsed.item_name.trim() : null;
 
-    // ★ タイトル生成ロジックをヘルパーに任せる
-    let mercari_title = buildMercariTitle(
+    // タイトルを最適化
+    const mercari_title = buildMercariTitle(
       parsed.mercari_title,
       item_name,
       output_text
@@ -321,7 +328,7 @@ export async function POST(req: NextRequest) {
     const genre: string | null =
       typeof parsed.genre === "string" ? parsed.genre.trim() : null;
 
-    // ===== appraisals に毎回フル情報を保存（ユーザー別履歴用） =====
+    // appraisals 保存
     try {
       await supabase.from("appraisals").insert([
         {
@@ -340,7 +347,7 @@ export async function POST(req: NextRequest) {
       console.error("appraisals 保存中の例外:", e);
     }
 
-    // ===== training_items にも毎回保存（is_trainable だけ分ける） =====
+    // training_items 保存
     try {
       const isTrainable = confidence !== null && confidence >= 90;
 
