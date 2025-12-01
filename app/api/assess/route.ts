@@ -44,6 +44,84 @@ const SYSTEM_PROMPT = [
   '{"output_text":"〜","mercari_title":"〜","mercari_description":"〜","confidence":90,"genre":"〜","item_name":"〜"}'
 ].join("\n");
 
+// ===== メルカリタイトル最適化ヘルパー =====
+function buildMercariTitle(
+  rawTitle: unknown,
+  item_name: string | null,
+  output_text: string
+): string {
+  const baseName = (item_name ?? "").trim();
+  const originalTitle =
+    typeof rawTitle === "string" ? rawTitle.trim() : "";
+
+  // ベースは「型名があれば item_name、なければ元タイトル」
+  let base = baseName || originalTitle;
+
+  if (!base) return "";
+
+  // ベースに含まれている単語セット
+  const baseWords = base
+    .split(/[\s　]+/)
+    .map((w) => w.trim())
+    .filter(Boolean);
+  const wordsInBase = new Set<string>(baseWords);
+
+  // 元タイトルから「ベースに無い＋重複していない」単語だけ追加候補にする
+  const extraWords: string[] = [];
+  const seen = new Set<string>();
+
+  if (originalTitle) {
+    const tokens: string[] = originalTitle.split(/[\s　]+/);
+    tokens.forEach((t: string) => {
+      const key = t.trim();
+      if (!key) return;
+      if (wordsInBase.has(key)) return;
+      if (seen.has(key)) return;
+      seen.add(key);
+      extraWords.push(key);
+    });
+  }
+
+  // output_text から状態／セット数のキーワードを抜く
+  const hints: string[] = [];
+
+  if (/未使用|新品同様/.test(output_text) && !base.includes("未使用")) {
+    hints.push("未使用に近い");
+  } else if (/美品/.test(output_text) && !base.includes("美品")) {
+    hints.push("美品");
+  }
+
+  const qtyMatch = output_text.match(/(\d+)\s*(本|枚|個|体|点)\s*セット?/);
+  if (qtyMatch) {
+    const phrase = `${qtyMatch[1]}${qtyMatch[2]}セット`;
+    if (!base.includes(phrase) && !extraWords.includes(phrase)) {
+      hints.push(phrase);
+    }
+  }
+
+  // タイトル組み立て：ベース + extra + hints
+  let title = base;
+
+  const tailParts: string[] = [];
+  extraWords.forEach((w) => tailParts.push(w));
+  hints.forEach((h) => {
+    if (!title.includes(h) && !tailParts.includes(h)) {
+      tailParts.push(h);
+    }
+  });
+
+  if (tailParts.length > 0) {
+    title = `${title} ${tailParts.join(" ")}`.trim();
+  }
+
+  // 最後に40文字でカット
+  if (title.length > 40) {
+    title = title.slice(0, 40);
+  }
+
+  return title;
+}
+
 export async function POST(req: NextRequest) {
   try {
     if (!process.env.OPENAI_API_KEY) {
@@ -74,7 +152,7 @@ export async function POST(req: NextRequest) {
 
     if (Array.isArray(raw)) {
       images = raw
-        .map((v) => {
+        .map((v: any) => {
           if (typeof v === "string") return v;
           if (v?.url) return v.url;
           if (v?.image_url) return v.image_url;
@@ -215,7 +293,7 @@ export async function POST(req: NextRequest) {
         ? parsed.output_text
         : String(rawText);
 
-    // ★ 万一【想定相場】が入っていなかったらサーバー側で 1 行足す
+    // 万一【想定相場】が入っていなかったらサーバー側で 1 行足す
     let output_text = output_text_raw;
     if (!output_text.includes("【想定相場】")) {
       const sep = output_text.endsWith("\n") ? "" : "\n";
@@ -225,32 +303,12 @@ export async function POST(req: NextRequest) {
     const item_name: string | null =
       typeof parsed.item_name === "string" ? parsed.item_name.trim() : null;
 
-    let mercari_title: string =
-      typeof parsed.mercari_title === "string" ? parsed.mercari_title : "";
-
-    // 型名は必ず含める
-    if (item_name && !mercari_title.includes(item_name)) {
-      mercari_title = `${mercari_title} ${item_name}`.trim();
-    }
-
-    // ★ タイトル内の重複ワードを削除（同じ単語を何度も書かない）
-    if (mercari_title) {
-      const tokens: string[] = mercari_title.split(/[\s　]+/);
-      const seen = new Set<string>();
-      const deduped = tokens.filter((t: string) => {
-        const key = t.trim();
-        if (!key) return false;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
-      mercari_title = deduped.join(" ");
-    }
-
-    // 40文字にトリム
-    if (mercari_title.length > 40) {
-      mercari_title = mercari_title.slice(0, 40);
-    }
+    // ★ タイトル生成ロジックをヘルパーに任せる
+    let mercari_title = buildMercariTitle(
+      parsed.mercari_title,
+      item_name,
+      output_text
+    );
 
     const mercari_description: string =
       typeof parsed.mercari_description === "string"
@@ -267,7 +325,7 @@ export async function POST(req: NextRequest) {
     try {
       await supabase.from("appraisals").insert([
         {
-          user_id, // null も許容（未ログイン時など）
+          user_id,
           genre,
           item_name,
           confidence,
