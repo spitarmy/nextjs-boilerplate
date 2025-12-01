@@ -18,7 +18,7 @@ type AssessResponse = {
 
 const MAX_FILES = 3;
 const MAX_FILE_SIZE = 2 * 1024 * 1024; // 2MB/枚 目安
-const MAX_LONG_SIDE = 1024; // px
+const MAX_LONG_SIDE = 800; // px
 
 async function fileToCompressedDataUrl(file: File): Promise<string> {
   // 画像を読み込んでリサイズ & JPEG に圧縮
