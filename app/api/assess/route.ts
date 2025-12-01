@@ -10,6 +10,7 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
+// ★ フォーマット固定＋コードブロック禁止
 const SYSTEM_PROMPT = [
   "あなたは骨董・ブランド・和装・雑貨・おもちゃ・時計・家電など幅広い商品を査定するAIです。",
   "画像からブランド名・カテゴリ・型名・状態を分析し、JSON形式で返答します。",
@@ -19,15 +20,25 @@ const SYSTEM_PROMPT = [
   "◆ JSON のキーは output_text / mercari_title / mercari_description / confidence / genre / item_name の6つ。",
   "◆ confidence は 0〜100 の整数（%）。",
   "◆ item_name は短く1行で返す。",
+  "◆ ``` や ```json などのコードブロックは一切使わず、プレーンテキストのJSONだけを返す。",
   "",
-  "【output_text（社内用）】1〜5行。真贋・型名・状態・推定販売価格を含める。",
-  "価格はフリマアプリの実際の売れた価格帯（控えめ）。",
+  "【output_text（社内用）】",
+  "・1〜5行のみ。",
+  "・原則として次の4行構成にする：",
+  "　1行目：【真贋】〜",
+  "　2行目：【型名】〜",
+  "　3行目：【状態】〜",
+  "　4行目：【想定相場】◯◯,◯◯◯〜◯◯,◯◯◯円前後（◯◯基準）",
+  "・相場が不明な場合でも、4行目は【想定相場】不明（データ不足）という形式で必ず1行出す。",
+  "・価格はフリマアプリの『実際に売れた価格帯』を基準にし、やや控えめ（相場の下限〜中間）にする。",
+  "・買取店の店頭価格や定価は参考にしない。",
   "",
   "【mercari_title】40文字以内。",
   "【mercari_description】200〜400文字。金額は禁止。",
   "",
   "【禁止事項】",
-  "・査定やAIのことを書くな。",
+  "・査定・AI・内部情報について本文に書かない。",
+  "・mercari_description に金額を書かない。",
   "",
   "【JSONフォーマット指定】",
   '{"output_text":"〜","mercari_title":"〜","mercari_description":"〜","confidence":90,"genre":"〜","item_name":"〜"}'
@@ -101,7 +112,8 @@ export async function POST(req: NextRequest) {
 
       if (jewelryRows?.length) {
         referenceBlocks.push(
-          "[ジュエリー系]\n" + jewelryRows.map((r: any) => JSON.stringify(r)).join("\n")
+          "[ジュエリー系]\n" +
+            jewelryRows.map((r: any) => JSON.stringify(r)).join("\n")
         );
       }
 
@@ -112,7 +124,8 @@ export async function POST(req: NextRequest) {
 
       if (kinkoRows?.length) {
         referenceBlocks.push(
-          "[金工・漆器系]\n" + kinkoRows.map((r: any) => JSON.stringify(r)).join("\n")
+          "[金工・漆器系]\n" +
+            kinkoRows.map((r: any) => JSON.stringify(r)).join("\n")
         );
       }
 
@@ -190,10 +203,18 @@ export async function POST(req: NextRequest) {
     }
 
     // ===== パース結果を抽出 =====
-    const output_text =
+    const output_text_raw =
       typeof parsed.output_text === "string"
         ? parsed.output_text
         : String(rawText);
+
+    // ★ 万一【想定相場】が入っていなかったらサーバー側で 1 行足す
+    let output_text = output_text_raw;
+    if (!output_text.includes("【想定相場】")) {
+      const sep = output_text.endsWith("\n") ? "" : "\n";
+      output_text =
+        output_text + sep + "【想定相場】不明（データ不足）";
+    }
 
     const item_name: string | null =
       typeof parsed.item_name === "string" ? parsed.item_name.trim() : null;
@@ -220,7 +241,7 @@ export async function POST(req: NextRequest) {
     const genre: string | null =
       typeof parsed.genre === "string" ? parsed.genre.trim() : null;
 
-    // ===== ★ appraisals に超シンプルに毎回保存 =====
+    // ===== appraisals に毎回保存（ユーザー別履歴用の生データ） =====
     try {
       await supabase.from("appraisals").insert([
         {
