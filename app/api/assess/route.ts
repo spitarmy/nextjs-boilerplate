@@ -61,6 +61,13 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // フロントから送られてきた user_id（ログインユーザー）
+    const user_id: string | null =
+      typeof (body as any).user_id === "string" &&
+      (body as any).user_id.trim().length > 0
+        ? (body as any).user_id
+        : null;
+
     // 画像を抽出
     const raw = (body as any).image_urls ?? (body as any).images ?? null;
     let images: string[] = [];
@@ -212,8 +219,7 @@ export async function POST(req: NextRequest) {
     let output_text = output_text_raw;
     if (!output_text.includes("【想定相場】")) {
       const sep = output_text.endsWith("\n") ? "" : "\n";
-      output_text =
-        output_text + sep + "【想定相場】不明（データ不足）";
+      output_text = output_text + sep + "【想定相場】不明（データ不足）";
     }
 
     const item_name: string | null =
@@ -241,10 +247,17 @@ export async function POST(req: NextRequest) {
     const genre: string | null =
       typeof parsed.genre === "string" ? parsed.genre.trim() : null;
 
-    // ===== appraisals に毎回保存（ユーザー別履歴用の生データ） =====
+    // ===== appraisals に毎回フル情報を保存（ユーザー別履歴用） =====
     try {
       await supabase.from("appraisals").insert([
         {
+          user_id, // null も許容（未ログイン時など）
+          genre,
+          item_name,
+          confidence,
+          mercari_title,
+          mercari_description,
+          output_text,
           image_urls: images,
           model: "gpt-4.1",
         },
