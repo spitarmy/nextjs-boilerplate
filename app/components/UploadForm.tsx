@@ -59,11 +59,22 @@ export default function UploadForm() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
 
+  // 画面幅に応じてレイアウト切り替え（スマホは1カラム）
+  const [isMobile, setIsMobile] = useState(false);
+
   useEffect(() => {
     (async () => {
       const { data } = await supabase.auth.getUser();
       setUserId(data.user?.id ?? null);
     })();
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const check = () => setIsMobile(window.innerWidth < 768);
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
   }, []);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -155,9 +166,11 @@ export default function UploadForm() {
   return (
     <div
       style={{
-        display: "grid",
-        gridTemplateColumns: "minmax(0, 1.1fr) minmax(0, 1.2fr)",
-        gap: 24,
+        display: isMobile ? "block" : "grid",
+        gridTemplateColumns: isMobile
+          ? undefined
+          : "minmax(0, 1.05fr) minmax(0, 1.25fr)",
+        gap: isMobile ? 20 : 24,
         alignItems: "flex-start",
       }}
     >
@@ -165,30 +178,33 @@ export default function UploadForm() {
       <section
         style={{
           background:
-            "radial-gradient(circle at top left, rgba(51,65,85,0.45), transparent 60%), #020617",
-          borderRadius: 20,
-          padding: 24,
-          border: "1px solid rgba(148,163,184,0.35)",
-          boxShadow: "0 18px 45px rgba(15,23,42,0.75)",
+            "radial-gradient(circle at top left, rgba(31,41,55,0.3), rgba(15,23,42,0.98))",
+          borderRadius: isMobile ? 18 : 20,
+          padding: isMobile ? 18 : 24,
+          border: "1px solid rgba(15,23,42,0.9)",
+          boxShadow: "0 18px 45px rgba(15,23,42,0.7)",
+          color: "#e5e7eb",
         }}
       >
         <h2
           style={{
-            fontSize: 20,
+            fontSize: isMobile ? 18 : 20,
             fontWeight: 700,
             margin: "0 0 4px",
           }}
         >
-          AI査定コンソール
+          査定する
         </h2>
         <p
           style={{
-            fontSize: 13,
-            color: "#9ca3af",
-            margin: "0 0 18px",
+            fontSize: 12,
+            color: "#d1d5db",
+            margin: "0 0 14px",
+            lineHeight: 1.7,
           }}
         >
-          最大 {MAX_FILES} 枚までまとめてアップロードできます。画像は長辺800pxに自動圧縮され、真贋・相場・メルカリ出品文まで一括生成します。
+          最大 {MAX_FILES} 枚までアップロードできます。画像は長辺800pxに自動圧縮され、
+          真贋・相場・フリマサイト用タイトル／説明文まで一括生成します。
         </p>
 
         <form onSubmit={handleSubmit}>
@@ -197,18 +213,18 @@ export default function UploadForm() {
               display: "block",
               fontSize: 13,
               marginBottom: 8,
-              color: "#e5e7eb",
+              color: "#f9fafb",
             }}
           >
             商品画像（1〜{MAX_FILES} 枚）
           </label>
           <div
             style={{
-              marginBottom: 12,
-              padding: 16,
-              borderRadius: 16,
-              border: "1px dashed rgba(148,163,184,0.6)",
-              backgroundColor: "rgba(15,23,42,0.9)",
+              marginBottom: 10,
+              padding: 14,
+              borderRadius: 14,
+              border: "1px dashed rgba(148,163,184,0.7)",
+              backgroundColor: "rgba(15,23,42,0.96)",
             }}
           >
             <input
@@ -226,7 +242,8 @@ export default function UploadForm() {
                 lineHeight: 1.6,
               }}
             >
-              ・1枚あたり最大10MB・合計25MBまでアップロード可能です。<br />
+              ・1枚あたり最大10MB・合計25MBまでアップロード可能です。
+              <br />
               ・査定に不要な背景はなるべくカットすると精度が上がります。
             </div>
           </div>
@@ -235,7 +252,7 @@ export default function UploadForm() {
             <ul
               style={{
                 fontSize: 12,
-                margin: "0 0 16px",
+                margin: "0 0 12px",
                 paddingLeft: 18,
                 color: "#e5e7eb",
               }}
@@ -253,7 +270,7 @@ export default function UploadForm() {
             disabled={loading || files.length === 0}
             style={{
               width: "100%",
-              padding: "12px 16px",
+              padding: "11px 16px",
               borderRadius: 999,
               border: "none",
               background:
@@ -267,7 +284,6 @@ export default function UploadForm() {
               opacity: loading ? 0.9 : 1,
               boxShadow:
                 "0 14px 35px rgba(37,99,235,0.45), 0 0 0 1px rgba(148,163,184,0.4)",
-              transition: "transform 0.08s ease-out, box-shadow 0.08s ease-out",
             }}
           >
             {loading ? "AIが査定しています…" : "AI査定を開始する"}
@@ -277,13 +293,13 @@ export default function UploadForm() {
         {errorMsg && (
           <div
             style={{
-              marginTop: 16,
-              padding: 12,
+              marginTop: 14,
+              padding: 10,
               borderRadius: 10,
               background: "rgba(127,29,29,0.2)",
               border: "1px solid rgba(248,113,113,0.6)",
               color: "#fecaca",
-              fontSize: 13,
+              fontSize: 12,
             }}
           >
             {errorMsg}
@@ -291,18 +307,25 @@ export default function UploadForm() {
         )}
       </section>
 
-      {/* 右側：査定結果カード */}
-      <section style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {/* 右側：査定結果カード（スマホでは下に縦並び） */}
+      <section
+        style={{
+          marginTop: isMobile ? 16 : 0,
+          display: "flex",
+          flexDirection: "column",
+          gap: 14,
+        }}
+      >
         {!result && (
           <div
             style={{
-              borderRadius: 20,
-              padding: 20,
+              borderRadius: 16,
+              padding: isMobile ? 14 : 16,
               border: "1px dashed rgba(148,163,184,0.55)",
               background:
-                "linear-gradient(135deg, rgba(15,23,42,0.85), rgba(15,23,42,0.95))",
-              color: "#9ca3af",
-              fontSize: 13,
+                "linear-gradient(135deg, rgba(248,250,252,0.95), rgba(226,232,240,0.95))",
+              color: "#4b5563",
+              fontSize: 12,
               lineHeight: 1.7,
             }}
           >
@@ -313,28 +336,29 @@ export default function UploadForm() {
             <br />
             ・想定相場（控えめレンジ）
             <br />
-            ・メルカリ用タイトル／説明文
+            ・フリマサイト用タイトル／説明文
             <br />
             が自動生成されます。
           </div>
         )}
 
         {result && result.ok && (
-          <div style={{ display: "grid", gap: 16 }}>
+          <div style={{ display: "grid", gap: 14 }}>
             {/* 査定コメント */}
             <section
               style={{
-                padding: 16,
+                padding: isMobile ? 14 : 16,
                 borderRadius: 16,
                 background:
-                  "radial-gradient(circle at top left, rgba(30,64,175,0.25), rgba(15,23,42,1))",
+                  "radial-gradient(circle at top left, rgba(30,64,175,0.15), #0f172a)",
                 border: "1px solid rgba(129,140,248,0.4)",
+                color: "#e5e7eb",
               }}
             >
               <h3
                 style={{
                   margin: "0 0 8px",
-                  fontSize: 15,
+                  fontSize: 14,
                   fontWeight: 600,
                 }}
               >
@@ -345,7 +369,6 @@ export default function UploadForm() {
                   whiteSpace: "pre-wrap",
                   fontSize: 13,
                   lineHeight: 1.7,
-                  color: "#e5e7eb",
                 }}
               >
                 {result.output_text}
@@ -354,7 +377,7 @@ export default function UploadForm() {
                 style={{
                   marginTop: 8,
                   fontSize: 11,
-                  color: "#9ca3af",
+                  color: "#cbd5f5",
                 }}
               >
                 信頼度:{" "}
@@ -368,13 +391,14 @@ export default function UploadForm() {
               </div>
             </section>
 
-            {/* メルカリ用タイトル */}
+            {/* フリマサイト用タイトル */}
             <section
               style={{
-                padding: 16,
+                padding: isMobile ? 14 : 16,
                 borderRadius: 16,
-                background: "#020617",
+                background: "#0b1120",
                 border: "1px solid rgba(55,65,81,0.9)",
+                color: "#e5e7eb",
               }}
             >
               <div
@@ -383,6 +407,7 @@ export default function UploadForm() {
                   justifyContent: "space-between",
                   alignItems: "center",
                   marginBottom: 8,
+                  gap: 8,
                 }}
               >
                 <h3
@@ -392,7 +417,7 @@ export default function UploadForm() {
                     fontWeight: 600,
                   }}
                 >
-                  メルカリ用タイトル
+                  フリマサイト用タイトル
                 </h3>
                 <button
                   type="button"
@@ -403,9 +428,10 @@ export default function UploadForm() {
                     borderRadius: 999,
                     border: "1px solid rgba(148,163,184,0.7)",
                     background:
-                      "linear-gradient(to right, #111827, #020617)",
+                      "linear-gradient(to right, #020617, #020617)",
                     color: "#e5e7eb",
                     cursor: "pointer",
+                    whiteSpace: "nowrap",
                   }}
                 >
                   コピー
@@ -426,13 +452,14 @@ export default function UploadForm() {
               />
             </section>
 
-            {/* メルカリ用説明文 */}
+            {/* フリマサイト用説明文 */}
             <section
               style={{
-                padding: 16,
+                padding: isMobile ? 14 : 16,
                 borderRadius: 16,
-                background: "#020617",
+                background: "#0b1120",
                 border: "1px solid rgba(55,65,81,0.9)",
+                color: "#e5e7eb",
               }}
             >
               <div
@@ -441,6 +468,7 @@ export default function UploadForm() {
                   justifyContent: "space-between",
                   alignItems: "center",
                   marginBottom: 8,
+                  gap: 8,
                 }}
               >
                 <h3
@@ -450,7 +478,7 @@ export default function UploadForm() {
                     fontWeight: 600,
                   }}
                 >
-                  メルカリ用説明文
+                  フリマサイト用説明文
                 </h3>
                 <button
                   type="button"
@@ -463,9 +491,10 @@ export default function UploadForm() {
                     borderRadius: 999,
                     border: "1px solid rgba(148,163,184,0.7)",
                     background:
-                      "linear-gradient(to right, #111827, #020617)",
+                      "linear-gradient(to right, #020617, #020617)",
                     color: "#e5e7eb",
                     cursor: "pointer",
+                    whiteSpace: "nowrap",
                   }}
                 >
                   コピー
@@ -474,7 +503,7 @@ export default function UploadForm() {
               <textarea
                 readOnly
                 value={result.mercari_description ?? ""}
-                rows={8}
+                rows={isMobile ? 6 : 8}
                 style={{
                   width: "100%",
                   padding: "8px 10px",
