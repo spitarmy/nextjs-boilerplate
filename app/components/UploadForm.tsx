@@ -17,9 +17,9 @@ type AssessResponse = {
 
 const MAX_FILES = 3;
 
-// 元画像の容量制限（かなりゆるめ）
+// 元画像の容量制限
 const MAX_ORIGINAL_SIZE_PER_FILE = 10 * 1024 * 1024; // 10MB/枚
-const MAX_ORIGINAL_TOTAL_SIZE = 25 * 1024 * 1024;    // 3枚合計 25MB
+const MAX_ORIGINAL_TOTAL_SIZE = 25 * 1024 * 1024; // 3枚合計 25MB
 
 // 圧縮後の長辺ピクセル
 const MAX_LONG_SIDE = 800;
@@ -57,7 +57,6 @@ export default function UploadForm() {
   const [result, setResult] = useState<AssessResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-
   const [userId, setUserId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -113,7 +112,6 @@ export default function UploadForm() {
     setLoading(true);
 
     try {
-      // 画像を圧縮して dataURL に変換
       const imageUrls: string[] = [];
       for (const file of files) {
         const dataUrl = await fileToCompressedDataUrl(file);
@@ -134,9 +132,11 @@ export default function UploadForm() {
       } else {
         setResult(json);
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error(err);
-      setErrorMsg("通信エラーが発生しました。ネットワーク環境を確認してください。");
+      setErrorMsg(
+        "通信エラーが発生しました。ネットワーク環境を確認してください。"
+      );
     } finally {
       setLoading(false);
     }
@@ -153,186 +153,343 @@ export default function UploadForm() {
   };
 
   return (
-    <div style={{ maxWidth: 900, margin: "0 auto" }}>
-      <form onSubmit={handleSubmit}>
-        <div style={{ marginBottom: 8 }}>
-          <input
-            type="file"
-            accept="image/*"
-            multiple
-            onChange={handleFileChange}
-          />
-        </div>
-        <div style={{ fontSize: 12, color: "#555", marginBottom: 12 }}>
-          ※ 最大 {MAX_FILES} 枚まで選択可能。長辺 800px に圧縮して送信します。
-        </div>
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "minmax(0, 1.1fr) minmax(0, 1.2fr)",
+        gap: 24,
+        alignItems: "flex-start",
+      }}
+    >
+      {/* 左側：アップロード＆説明 */}
+      <section
+        style={{
+          background:
+            "radial-gradient(circle at top left, rgba(51,65,85,0.45), transparent 60%), #020617",
+          borderRadius: 20,
+          padding: 24,
+          border: "1px solid rgba(148,163,184,0.35)",
+          boxShadow: "0 18px 45px rgba(15,23,42,0.75)",
+        }}
+      >
+        <h2
+          style={{
+            fontSize: 20,
+            fontWeight: 700,
+            margin: "0 0 4px",
+          }}
+        >
+          AI査定コンソール
+        </h2>
+        <p
+          style={{
+            fontSize: 13,
+            color: "#9ca3af",
+            margin: "0 0 18px",
+          }}
+        >
+          最大 {MAX_FILES} 枚までまとめてアップロードできます。画像は長辺800pxに自動圧縮され、真贋・相場・メルカリ出品文まで一括生成します。
+        </p>
 
-        {files.length > 0 && (
-          <ul style={{ fontSize: 12, marginBottom: 12 }}>
-            {files.map((f, i) => (
-              <li key={i}>
-                {f.name}（{Math.round(f.size / 1024)} KB）
-              </li>
-            ))}
-          </ul>
+        <form onSubmit={handleSubmit}>
+          <label
+            style={{
+              display: "block",
+              fontSize: 13,
+              marginBottom: 8,
+              color: "#e5e7eb",
+            }}
+          >
+            商品画像（1〜{MAX_FILES} 枚）
+          </label>
+          <div
+            style={{
+              marginBottom: 12,
+              padding: 16,
+              borderRadius: 16,
+              border: "1px dashed rgba(148,163,184,0.6)",
+              backgroundColor: "rgba(15,23,42,0.9)",
+            }}
+          >
+            <input
+              type="file"
+              accept="image/*"
+              multiple
+              onChange={handleFileChange}
+              style={{ fontSize: 13, color: "#e5e7eb" }}
+            />
+            <div
+              style={{
+                fontSize: 11,
+                color: "#9ca3af",
+                marginTop: 8,
+                lineHeight: 1.6,
+              }}
+            >
+              ・1枚あたり最大10MB・合計25MBまでアップロード可能です。<br />
+              ・査定に不要な背景はなるべくカットすると精度が上がります。
+            </div>
+          </div>
+
+          {files.length > 0 && (
+            <ul
+              style={{
+                fontSize: 12,
+                margin: "0 0 16px",
+                paddingLeft: 18,
+                color: "#e5e7eb",
+              }}
+            >
+              {files.map((f, i) => (
+                <li key={i}>
+                  {f.name}（{Math.round(f.size / 1024)} KB）
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <button
+            type="submit"
+            disabled={loading || files.length === 0}
+            style={{
+              width: "100%",
+              padding: "12px 16px",
+              borderRadius: 999,
+              border: "none",
+              background:
+                loading || files.length === 0
+                  ? "linear-gradient(to right, #4b5563, #6b7280)"
+                  : "linear-gradient(to right, #2563eb, #4f46e5)",
+              color: "#f9fafb",
+              fontSize: 15,
+              fontWeight: 600,
+              cursor: loading || files.length === 0 ? "default" : "pointer",
+              opacity: loading ? 0.9 : 1,
+              boxShadow:
+                "0 14px 35px rgba(37,99,235,0.45), 0 0 0 1px rgba(148,163,184,0.4)",
+              transition: "transform 0.08s ease-out, box-shadow 0.08s ease-out",
+            }}
+          >
+            {loading ? "AIが査定しています…" : "AI査定を開始する"}
+          </button>
+        </form>
+
+        {errorMsg && (
+          <div
+            style={{
+              marginTop: 16,
+              padding: 12,
+              borderRadius: 10,
+              background: "rgba(127,29,29,0.2)",
+              border: "1px solid rgba(248,113,113,0.6)",
+              color: "#fecaca",
+              fontSize: 13,
+            }}
+          >
+            {errorMsg}
+          </div>
+        )}
+      </section>
+
+      {/* 右側：査定結果カード */}
+      <section style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        {!result && (
+          <div
+            style={{
+              borderRadius: 20,
+              padding: 20,
+              border: "1px dashed rgba(148,163,184,0.55)",
+              background:
+                "linear-gradient(135deg, rgba(15,23,42,0.85), rgba(15,23,42,0.95))",
+              color: "#9ca3af",
+              fontSize: 13,
+              lineHeight: 1.7,
+            }}
+          >
+            右側には査定結果が表示されます。画像をアップロードして「AI査定を開始する」を押すと、
+            <br />
+            <br />
+            ・真贋コメント（根拠付き）
+            <br />
+            ・想定相場（控えめレンジ）
+            <br />
+            ・メルカリ用タイトル／説明文
+            <br />
+            が自動生成されます。
+          </div>
         )}
 
-        <button
-          type="submit"
-          disabled={loading || files.length === 0}
-          style={{
-            width: "100%",
-            padding: "12px 16px",
-            borderRadius: 999,
-            border: "none",
-            background: "#2563eb",
-            color: "#fff",
-            fontSize: 16,
-            cursor: loading ? "default" : "pointer",
-            opacity: loading ? 0.6 : 1,
-          }}
-        >
-          {loading ? "AI査定中..." : "AI査定開始"}
-        </button>
-      </form>
-
-      {errorMsg && (
-        <div
-          style={{
-            marginTop: 16,
-            padding: 12,
-            borderRadius: 8,
-            background: "#fef2f2",
-            color: "#b91c1c",
-            fontSize: 14,
-          }}
-        >
-          {errorMsg}
-        </div>
-      )}
-
-      {result && result.ok && (
-        <div style={{ marginTop: 24, display: "grid", gap: 16 }}>
-          {/* 査定コメント */}
-          <section
-            style={{
-              padding: 16,
-              borderRadius: 12,
-              background: "#f9fafb",
-              border: "1px solid #e5e7eb",
-            }}
-          >
-            <h3 style={{ margin: "0 0 8px", fontSize: 16 }}>査定コメント</h3>
-            <p style={{ whiteSpace: "pre-wrap", fontSize: 14 }}>
-              {result.output_text}
-            </p>
-            <div style={{ marginTop: 8, fontSize: 12, color: "#6b7280" }}>
-              信頼度:{" "}
-              {typeof result.confidence === "number"
-                ? `${result.confidence}%`
-                : "不明"}
-              {"　"}
-              ジャンル: {result.genre ?? "不明"}
-              {"　"}
-              型名: {result.item_name ?? "不明"}
-            </div>
-          </section>
-
-          {/* メルカリ用タイトル */}
-          <section
-            style={{
-              padding: 16,
-              borderRadius: 12,
-              background: "#f9fafb",
-              border: "1px solid #e5e7eb",
-            }}
-          >
-            <div
+        {result && result.ok && (
+          <div style={{ display: "grid", gap: 16 }}>
+            {/* 査定コメント */}
+            <section
               style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginBottom: 8,
+                padding: 16,
+                borderRadius: 16,
+                background:
+                  "radial-gradient(circle at top left, rgba(30,64,175,0.25), rgba(15,23,42,1))",
+                border: "1px solid rgba(129,140,248,0.4)",
               }}
             >
-              <h3 style={{ margin: 0, fontSize: 16 }}>メルカリ用タイトル</h3>
-              <button
-                type="button"
-                onClick={() => copyToClipboard(result.mercari_title)}
+              <h3
                 style={{
-                  fontSize: 12,
-                  padding: "4px 8px",
-                  borderRadius: 999,
-                  border: "1px solid #e5e7eb",
-                  background: "#fff",
-                  cursor: "pointer",
+                  margin: "0 0 8px",
+                  fontSize: 15,
+                  fontWeight: 600,
                 }}
               >
-                コピー
-              </button>
-            </div>
-            <input
-              readOnly
-              value={result.mercari_title ?? ""}
-              style={{
-                width: "100%",
-                padding: "8px 10px",
-                borderRadius: 8,
-                border: "1px solid #d1d5db",
-                fontSize: 14,
-              }}
-            />
-          </section>
+                査定コメント
+              </h3>
+              <p
+                style={{
+                  whiteSpace: "pre-wrap",
+                  fontSize: 13,
+                  lineHeight: 1.7,
+                  color: "#e5e7eb",
+                }}
+              >
+                {result.output_text}
+              </p>
+              <div
+                style={{
+                  marginTop: 8,
+                  fontSize: 11,
+                  color: "#9ca3af",
+                }}
+              >
+                信頼度:{" "}
+                {typeof result.confidence === "number"
+                  ? `${result.confidence}%`
+                  : "不明"}
+                {"　"}
+                ジャンル: {result.genre ?? "不明"}
+                {"　"}
+                型名: {result.item_name ?? "不明"}
+              </div>
+            </section>
 
-          {/* メルカリ用説明文 */}
-          <section
-            style={{
-              padding: 16,
-              borderRadius: 12,
-              background: "#f9fafb",
-              border: "1px solid #e5e7eb",
-            }}
-          >
-            <div
+            {/* メルカリ用タイトル */}
+            <section
               style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginBottom: 8,
+                padding: 16,
+                borderRadius: 16,
+                background: "#020617",
+                border: "1px solid rgba(55,65,81,0.9)",
               }}
             >
-              <h3 style={{ margin: 0, fontSize: 16 }}>メルカリ用説明文</h3>
-              <button
-                type="button"
-                onClick={() => copyToClipboard(result.mercari_description)}
+              <div
                 style={{
-                  fontSize: 12,
-                  padding: "4px 8px",
-                  borderRadius: 999,
-                  border: "1px solid #e5e7eb",
-                  background: "#fff",
-                  cursor: "pointer",
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  marginBottom: 8,
                 }}
               >
-                コピー
-              </button>
-            </div>
-            <textarea
-              readOnly
-              value={result.mercari_description ?? ""}
-              rows={8}
+                <h3
+                  style={{
+                    margin: 0,
+                    fontSize: 14,
+                    fontWeight: 600,
+                  }}
+                >
+                  メルカリ用タイトル
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => copyToClipboard(result.mercari_title)}
+                  style={{
+                    fontSize: 11,
+                    padding: "4px 10px",
+                    borderRadius: 999,
+                    border: "1px solid rgba(148,163,184,0.7)",
+                    background:
+                      "linear-gradient(to right, #111827, #020617)",
+                    color: "#e5e7eb",
+                    cursor: "pointer",
+                  }}
+                >
+                  コピー
+                </button>
+              </div>
+              <input
+                readOnly
+                value={result.mercari_title ?? ""}
+                style={{
+                  width: "100%",
+                  padding: "8px 10px",
+                  borderRadius: 10,
+                  border: "1px solid rgba(55,65,81,0.9)",
+                  fontSize: 13,
+                  backgroundColor: "#020617",
+                  color: "#e5e7eb",
+                }}
+              />
+            </section>
+
+            {/* メルカリ用説明文 */}
+            <section
               style={{
-                width: "100%",
-                padding: "8px 10px",
-                borderRadius: 8,
-                border: "1px solid #d1d5db",
-                fontSize: 14,
-                resize: "vertical",
+                padding: 16,
+                borderRadius: 16,
+                background: "#020617",
+                border: "1px solid rgba(55,65,81,0.9)",
               }}
-            />
-          </section>
-        </div>
-      )}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  marginBottom: 8,
+                }}
+              >
+                <h3
+                  style={{
+                    margin: 0,
+                    fontSize: 14,
+                    fontWeight: 600,
+                  }}
+                >
+                  メルカリ用説明文
+                </h3>
+                <button
+                  type="button"
+                  onClick={() =>
+                    copyToClipboard(result.mercari_description)
+                  }
+                  style={{
+                    fontSize: 11,
+                    padding: "4px 10px",
+                    borderRadius: 999,
+                    border: "1px solid rgba(148,163,184,0.7)",
+                    background:
+                      "linear-gradient(to right, #111827, #020617)",
+                    color: "#e5e7eb",
+                    cursor: "pointer",
+                  }}
+                >
+                  コピー
+                </button>
+              </div>
+              <textarea
+                readOnly
+                value={result.mercari_description ?? ""}
+                rows={8}
+                style={{
+                  width: "100%",
+                  padding: "8px 10px",
+                  borderRadius: 10,
+                  border: "1px solid rgba(55,65,81,0.9)",
+                  fontSize: 13,
+                  backgroundColor: "#020617",
+                  color: "#e5e7eb",
+                  resize: "vertical",
+                }}
+              />
+            </section>
+          </div>
+        )}
+      </section>
     </div>
   );
 }
