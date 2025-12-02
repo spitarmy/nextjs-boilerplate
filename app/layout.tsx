@@ -4,7 +4,7 @@ import React from "react";
 
 export const metadata: Metadata = {
   title: "カンテノ｜Webカンテノ査定",
-  description: "画像から真贋＋相場＋出品文を生成する査定AIシステム",
+  description: "画像から真贋・相場・メルカリ出品文を自動生成する査定AIシステム",
 };
 
 export default function RootLayout({
@@ -18,12 +18,14 @@ export default function RootLayout({
         style={{
           margin: 0,
           minHeight: "100vh",
-          backgroundColor: "#020617", // ほぼ黒のダークネイビー
-          color: "#e5e7eb", // 明るめグレー
+          background:
+            "radial-gradient(circle at top, #f9fafb 0, #eef2ff 35%, #e5e7eb 100%)",
+          color: "#111827",
           fontFamily:
             'system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif',
         }}
       >
+        {/* 全体ラッパー */}
         <div
           style={{
             minHeight: "100vh",
@@ -31,35 +33,52 @@ export default function RootLayout({
             flexDirection: "column",
           }}
         >
-          {/* 共通ヘッダー */}
+          {/* ヘッダー（明るい＆フラット） */}
           <header
             style={{
-              borderBottom: "1px solid rgba(148,163,184,0.25)",
-              background:
-                "linear-gradient(to right, rgba(15,23,42,0.9), rgba(15,23,42,0.98))",
-              backdropFilter: "blur(10px)",
+              backgroundColor: "#ffffff",
+              borderBottom: "1px solid #e5e7eb",
+              boxShadow: "0 4px 12px rgba(15,23,42,0.04)",
+              position: "sticky",
+              top: 0,
+              zIndex: 10,
             }}
           >
             <div
               style={{
                 maxWidth: 1040,
                 margin: "0 auto",
-                padding: "14px 20px",
+                padding: "10px 20px",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "space-between",
+                gap: 16,
               }}
             >
-              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <img
-                  src="/kanteno-logo.png"
-                  alt="カンテノ ロゴ"
+              {/* 左：ロゴ＋サービス名 */}
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div
                   style={{
-                    width: 40,
-                    height: 40,
-                    objectFit: "contain",
+                    width: 36,
+                    height: 36,
+                    borderRadius: 10,
+                    backgroundColor: "#f3f4f6",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    overflow: "hidden",
                   }}
-                />
+                >
+                  <img
+                    src="/kanteno-logo.png"
+                    alt="カンテノ ロゴ"
+                    style={{
+                      width: "80%",
+                      height: "80%",
+                      objectFit: "contain",
+                    }}
+                  />
+                </div>
                 <div>
                   <div
                     style={{
@@ -73,7 +92,7 @@ export default function RootLayout({
                   <div
                     style={{
                       fontSize: 11,
-                      color: "#9ca3af",
+                      color: "#6b7280",
                       letterSpacing: "0.16em",
                       textTransform: "uppercase",
                     }}
@@ -82,11 +101,15 @@ export default function RootLayout({
                   </div>
                 </div>
               </div>
+
+              {/* 右：サブタイトル */}
               <div
                 style={{
                   fontSize: 11,
-                  color: "#9ca3af",
+                  color: "#6b7280",
                   letterSpacing: "0.08em",
+                  textAlign: "right",
+                  whiteSpace: "nowrap",
                 }}
               >
                 Webカンテノ｜査定AIコンソール
@@ -94,16 +117,21 @@ export default function RootLayout({
             </div>
           </header>
 
-          {/* コンテンツエリア */}
+          {/* コンテンツエリア（明るい背景） */}
           <main
             style={{
               flex: 1,
-              display: "flex",
-              justifyContent: "center",
-              padding: "32px 16px 40px",
+              padding: "28px 16px 40px",
             }}
           >
-            <div style={{ width: "100%", maxWidth: 1040 }}>{children}</div>
+            <div
+              style={{
+                maxWidth: 1040,
+                margin: "0 auto",
+              }}
+            >
+              {children}
+            </div>
           </main>
         </div>
       </body>
