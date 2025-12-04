@@ -11,7 +11,7 @@ const openai = new OpenAI({
 });
 
 // ★ フォーマット固定＋コードブロック禁止
-const SYSTEM_PROMPT = const SYSTEM_PROMPT = [
+const SYSTEM_PROMPT = [
   "あなたは骨董・ブランド・和装・雑貨・おもちゃ・時計・家電など幅広い商品を査定するプロの鑑定士AIです。",
   "画像とリファレンス情報をもとに、真贋・型名・状態・相場・フリマサイト出品文を一貫した基準で出力します。",
   "",
