@@ -40,14 +40,14 @@ const SYSTEM_PROMPT = [
   " （刻印フォント・構造・配置バランスに複数の矛盾がある場合）",
   "",
   "【想定相場】",
-  "・実売相場の下限〜中央値を控えめに提示。",
+  "・フリマサイトの実売相場の下限〜中央値を控えめに提示。",
   "・偽物可能性が高い場合は「査定・買取対象外」と明示。",
   "・不明な場合は「【想定相場】不明（データ不足）」とする。",
   "",
   "【タイトル（40文字以内）】",
   "・ブランド名 / カテゴリ / 型名 / 状態 のみの簡潔構成",
   "・重複ワード禁止",
-  "・item_name を必ず含めるただし英単語のitem_nameという文字列をタイトルに書いてはならない",
+  "・item_name を必ず含める。ただし英単語の「item_name」という文字列をタイトルに書いてはならない。",
   "・余計な説明ワードは追加しない",
   "",
   "【フリマ説明文（200〜400文字）】",
@@ -104,7 +104,7 @@ const SYSTEM_PROMPT = [
   "",
   "以上を厳守し、ブランド真贋については特に慎重に、",
   "偽物を本物と誤判定しないことを最重視して出力してください。"
-].join("\\n");
+].join("\n");
 
 // ===== タイトル用トークン化ヘルパー =====
 function tokenizeForTitle(s: string): string[] {
@@ -191,6 +191,11 @@ function buildMercariTitle(
     title = title.slice(0, 40);
   }
 
+  // 念のため「item_name」という英単語が混ざっていたら除外
+  if (title.includes("item_name")) {
+    title = title.replace(/item_name/gi, "").trim();
+  }
+
   return title;
 }
 
@@ -215,6 +220,13 @@ export async function POST(req: NextRequest) {
       typeof (body as any).user_id === "string" &&
       (body as any).user_id.trim().length > 0
         ? (body as any).user_id
+        : null;
+
+    // （オプション）ジャンルヒント：今は null でもOK
+    const genre_hint: string | null =
+      typeof (body as any).genre_hint === "string" &&
+      (body as any).genre_hint.trim().length > 0
+        ? (body as any).genre_hint.trim()
         : null;
 
     // 画像を抽出
@@ -242,71 +254,282 @@ export async function POST(req: NextRequest) {
 
     // ===== Supabase リファレンス収集 =====
     let referenceBlocks: string[] = [];
+    const genreHintLower = (genre_hint ?? "").toLowerCase();
 
     try {
-      const { data: brandRows } = await supabase
-        .from("brand_data_reference_v2")
-        .select("brand,line_name,model_name")
-        .limit(30);
+      // 1) ブランド系（バッグ・時計・アパレル・小物など）
+      try {
+        let brandQuery = supabase
+          .from("brand_data_reference_v2")
+          .select(
+            "brand,genre,line_name,model_name,category,subcategory,material,authenticity_points,common_fake_patterns,condition_hint"
+          )
+          .limit(50);
 
-      if (brandRows?.length) {
-        referenceBlocks.push(
-          "[ブランドバッグ系]\n" +
-            brandRows
-              .map(
-                (r: any) =>
-                  `ブランド:${r.brand} / ライン:${r.line_name} / モデル:${r.model_name}`
-              )
-              .join("\n")
-        );
+        if (genre_hint) {
+          brandQuery = brandQuery.ilike("genre", `%${genre_hint}%`);
+        }
+
+        const { data: brandRows } = await brandQuery;
+
+        if (brandRows?.length) {
+          referenceBlocks.push(
+            "[ブランド系リファレンス]\n" +
+              brandRows
+                .map((r: any) => {
+                  const parts: string[] = [];
+                  if (r.brand) parts.push(`ブランド:${r.brand}`);
+                  if (r.genre) parts.push(`ジャンル:${r.genre}`);
+                  if (r.line_name) parts.push(`ライン:${r.line_name}`);
+                  if (r.model_name) parts.push(`モデル:${r.model_name}`);
+                  if (r.category || r.subcategory) {
+                    parts.push(
+                      `カテゴリ:${[r.category, r.subcategory]
+                        .filter(Boolean)
+                        .join(" / ")}`
+                    );
+                  }
+                  if (r.material) parts.push(`素材:${r.material}`);
+                  if (r.authenticity_points) {
+                    parts.push(`正規の特徴:${r.authenticity_points}`);
+                  }
+                  if (r.common_fake_patterns) {
+                    parts.push(`偽物の特徴:${r.common_fake_patterns}`);
+                  }
+                  if (r.condition_hint) {
+                    parts.push(`状態の見方:${r.condition_hint}`);
+                  }
+                  return parts.join(" / ");
+                })
+                .join("\n")
+          );
+        }
+      } catch (e) {
+        console.error("brand_data_reference_v2 取得エラー", e);
       }
 
-      const { data: jewelryRows } = await supabase
-        .from("jewelry_reference")
-        .select("*")
-        .limit(30);
+      // 2) ジュエリー系（ダイヤグレードなど）
+      try {
+        const shouldUseJewelry =
+          !genre_hint ||
+          /ジュエリー|宝石|ダイヤ|diamond|jewelry/i.test(genreHintLower);
 
-      if (jewelryRows?.length) {
-        referenceBlocks.push(
-          "[ジュエリー系]\n" +
-            jewelryRows.map((r: any) => JSON.stringify(r)).join("\n")
-        );
+        if (shouldUseJewelry) {
+          const { data: jewelryRows } = await supabase
+            .from("jewelry_reference")
+            .select(
+              "Carat,Color,Clarity,Cut,Fluorescence,Polish,Symmetry,Proportion_Notes,Inclusion_Features,Appearance_Notes,Lab,Report_Type"
+            )
+            .limit(50);
+
+          if (jewelryRows?.length) {
+            referenceBlocks.push(
+              "[ジュエリー系リファレンス]\n" +
+                jewelryRows
+                  .map((r: any) => {
+                    const parts: string[] = [];
+                    if (r.Carat != null) parts.push(`Carat:${r.Carat}`);
+                    if (r.Color) parts.push(`Color:${r.Color}`);
+                    if (r.Clarity) parts.push(`Clarity:${r.Clarity}`);
+                    if (r.Cut) parts.push(`Cut:${r.Cut}`);
+                    if (r.Fluorescence)
+                      parts.push(`Fluo:${r.Fluorescence}`);
+                    if (r.Polish) parts.push(`Polish:${r.Polish}`);
+                    if (r.Symmetry) parts.push(`Sym:${r.Symmetry}`);
+                    if (r.Proportion_Notes)
+                      parts.push(`Proportion:${r.Proportion_Notes}`);
+                    if (r.Inclusion_Features)
+                      parts.push(`Inclusion:${r.Inclusion_Features}`);
+                    if (r.Appearance_Notes)
+                      parts.push(`Appearance:${r.Appearance_Notes}`);
+                    if (r.Lab) parts.push(`Lab:${r.Lab}`);
+                    if (r.Report_Type)
+                      parts.push(`Report:${r.Report_Type}`);
+                    return parts.join(" / ");
+                  })
+                  .join("\n")
+            );
+          }
+        }
+      } catch (e) {
+        console.error("jewelry_reference 取得エラー", e);
       }
 
-      const { data: kinkoRows } = await supabase
-        .from("kinko_urushi_reference")
-        .select("*")
-        .limit(30);
+      // 3) 金工・漆器系（既存テーブル）
+      try {
+        const shouldUseKinko =
+          !genre_hint ||
+          /金工|漆器|茶道具|骨董|和物/i.test(genreHintLower);
 
-      if (kinkoRows?.length) {
-        referenceBlocks.push(
-          "[金工・漆器系]\n" +
-            kinkoRows.map((r: any) => JSON.stringify(r)).join("\n")
-        );
+        if (shouldUseKinko) {
+          const { data: kinkoRows } = await supabase
+            .from("kinko_urushi_reference")
+            .select("*")
+            .limit(50);
+
+          if (kinkoRows?.length) {
+            referenceBlocks.push(
+              "[金工・漆器系リファレンス]\n" +
+                kinkoRows
+                  .map((r: any) => {
+                    const parts: string[] = [];
+                    const author = r["作家・工房名"] ?? r.author_name;
+                    const kind = r["種別（分野）"] ?? r.category;
+                    const mark =
+                      r["刻印・花押の特徴"] ?? r.signature_traits;
+                    const technique =
+                      r["技法・意匠"] ?? r.technique ?? r.design;
+                    const judge =
+                      r["真贋・模倣判定ポイント"] ??
+                      r.authenticity_points;
+                    const era = r["主な年代"] ?? r.era;
+
+                    if (author) parts.push(`作家・工房名:${author}`);
+                    if (kind) parts.push(`種別:${kind}`);
+                    if (mark) parts.push(`刻印/花押:${mark}`);
+                    if (technique) parts.push(`技法/意匠:${technique}`);
+                    if (judge) parts.push(`真贋ポイント:${judge}`);
+                    if (era) parts.push(`主な年代:${era}`);
+
+                    return parts.join(" / ");
+                  })
+                  .join("\n")
+            );
+          }
+        }
+      } catch (e) {
+        console.error("kinko_urushi_reference 取得エラー", e);
       }
 
-      const { data: trainingRows } = await supabase
-        .from("training_items")
-        .select(
-          "genre,item_name,output_text,mercari_title,mercari_description,confidence"
-        )
-        .eq("is_trainable", true)
-        .order("created_at", { ascending: false })
-        .limit(50);
+      // 4) 和物・書画・陶磁器系（新設テーブル：wamon_reference）
+      try {
+        const shouldUseWamon =
+          !genre_hint ||
+          /骨董|和物|書画|掛軸|陶磁器|茶道具|日本画/i.test(
+            genreHintLower
+          );
 
-      if (trainingRows?.length) {
-        referenceBlocks.push(
-          "[過去の教師データ]\n" +
-            trainingRows
-              .map(
-                (r: any) =>
-                  `ジャンル:${r.genre} / 商品:${r.item_name} / 信頼度:${r.confidence}% / 概要:${r.output_text}`
-              )
-              .join("\n")
-        );
+        if (shouldUseWamon) {
+          const { data: wamonRows } = await supabase
+            .from("wamon_reference")
+            .select(
+              "genre,category,subcategory,author_name,work_title,style_traits,stroke_traits,signature_traits,seal_text,seal_shape_color,seal_position,box_traits,mounting_traits,technique,material_structure,authenticity_points,common_fake_patterns,era,school_lineage,notes"
+            )
+            .limit(50);
+
+          if (wamonRows?.length) {
+            referenceBlocks.push(
+              "[和物・書画・陶磁器系リファレンス]\n" +
+                wamonRows
+                  .map((r: any) => {
+                    const parts: string[] = [];
+                    if (r.genre) parts.push(`ジャンル:${r.genre}`);
+                    if (r.category || r.subcategory) {
+                      parts.push(
+                        `種別:${[r.category, r.subcategory]
+                          .filter(Boolean)
+                          .join(" / ")}`
+                      );
+                    }
+                    if (r.author_name) {
+                      parts.push(`作家・銘:${r.author_name}`);
+                    }
+                    if (r.work_title) {
+                      parts.push(`代表題材:${r.work_title}`);
+                    }
+                    if (r.style_traits) {
+                      parts.push(`書風・画風/産地:${r.style_traits}`);
+                    }
+                    if (r.stroke_traits) {
+                      parts.push(`筆跡・筆圧:${r.stroke_traits}`);
+                    }
+                    if (r.signature_traits) {
+                      parts.push(`落款/サイン特徴:${r.signature_traits}`);
+                    }
+                    if (r.seal_text || r.seal_shape_color) {
+                      parts.push(
+                        `印章:${[
+                          r.seal_text,
+                          r.seal_shape_color,
+                          r.seal_position,
+                        ]
+                          .filter(Boolean)
+                          .join(" / ")}`
+                      );
+                    }
+                    if (r.box_traits) {
+                      parts.push(`箱書/表具:${r.box_traits}`);
+                    }
+                    if (r.mounting_traits) {
+                      parts.push(`表具構成:${r.mounting_traits}`);
+                    }
+                    if (r.material_structure) {
+                      parts.push(`材質・構成:${r.material_structure}`);
+                    }
+                    if (r.technique) {
+                      parts.push(`技法:${r.technique}`);
+                    }
+                    if (r.authenticity_points) {
+                      parts.push(`真贋ポイント:${r.authenticity_points}`);
+                    }
+                    if (r.common_fake_patterns) {
+                      parts.push(`偽物パターン:${r.common_fake_patterns}`);
+                    }
+                    if (r.era) {
+                      parts.push(`時代:${r.era}`);
+                    }
+                    if (r.school_lineage) {
+                      parts.push(`流派・系統:${r.school_lineage}`);
+                    }
+                    if (r.notes) {
+                      parts.push(`備考:${r.notes}`);
+                    }
+                    return parts.join(" / ");
+                  })
+                  .join("\n")
+            );
+          }
+        }
+      } catch (e) {
+        // wamon_reference 未作成の間はここに来る想定
+        console.error("wamon_reference 取得エラー（未作成かも）", e);
+      }
+
+      // 5) 過去の教師データ（高信頼サンプル）
+      try {
+        const { data: trainingRows } = await supabase
+          .from("training_items")
+          .select(
+            "genre,item_name,output_text,mercari_title,mercari_description,confidence"
+          )
+          .eq("is_trainable", true)
+          .order("created_at", { ascending: false })
+          .limit(50);
+
+        if (trainingRows?.length) {
+          referenceBlocks.push(
+            "[過去の教師データ]\n" +
+              trainingRows
+                .map((r: any) => {
+                  return [
+                    r.genre ? `ジャンル:${r.genre}` : null,
+                    r.item_name ? `商品:${r.item_name}` : null,
+                    r.confidence != null
+                      ? `信頼度:${r.confidence}%`
+                      : null,
+                    r.output_text ? `概要:${r.output_text}` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" / ");
+                })
+                .join("\n")
+          );
+        }
+      } catch (e) {
+        console.error("training_items 取得エラー", e);
       }
     } catch (e) {
-      console.error("リファレンス取得エラー", e);
+      console.error("リファレンス取得全体エラー", e);
     }
 
     const referenceText = referenceBlocks.join("\n\n");
@@ -409,7 +632,7 @@ export async function POST(req: NextRequest) {
       console.error("appraisals 保存中の例外:", e);
     }
 
-    // training_items 保存
+    // training_items 保存（従来どおり）
     try {
       const isTrainable = confidence !== null && confidence >= 90;
 
