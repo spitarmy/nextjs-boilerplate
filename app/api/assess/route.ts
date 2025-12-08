@@ -117,7 +117,7 @@ const SYSTEM_PROMPT = [
   "",
   "以上を厳守し、ブランド真贋および和物の落款・サイン判定については特に慎重に、",
   "偽物を本物と誤判定しないことを最重視して出力してください。"
-].join("\\n");
+].join("\n");
 
 // ===== タイトル用トークン化ヘルパー =====
 function tokenizeForTitle(s: string): string[] {
@@ -127,7 +127,6 @@ function tokenizeForTitle(s: string): string[] {
     .map((w) => w.trim())
     .filter(Boolean);
 }
-
 
 // ===== メルカリタイトル最適化ヘルパー =====
 function buildMercariTitle(
@@ -173,7 +172,7 @@ function buildMercariTitle(
     hints.push("美品");
   }
 
-  const qtyMatch = output_text.match(/(\\d+)\\s*(本|枚|個|体|点)\\s*セット?/);
+  const qtyMatch = output_text.match(/(\d+)\s*(本|枚|個|体|点)\s*セット?/);
   if (qtyMatch) {
     const phrase = `${qtyMatch[1]}${qtyMatch[2]}セット`;
     if (!base.includes(phrase) && !extraWords.includes(phrase)) {
@@ -207,6 +206,39 @@ function buildMercariTitle(
   }
 
   return title;
+}
+
+// ===== レート制限向け: 遅延ヘルパー =====
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// ===== OpenAI呼び出し（429時はリトライ） =====
+async function callOpenAIWithRetry(
+  client: OpenAI,
+  payload: any,
+  maxRetries = 2
+): Promise<any> {
+  let attempt = 0;
+  // 最大で 1回目 + 2回リトライ = 3回まで
+  while (true) {
+    try {
+      return await client.responses.create(payload);
+    } catch (err: any) {
+      const status = err?.status ?? err?.response?.status;
+      // 429 以外のエラーはそのまま投げる
+      if (status !== 429 || attempt >= maxRetries) {
+        throw err;
+      }
+      // 429 のときは指数バックオフで少し待ってから再試行
+      attempt += 1;
+      const waitMs = 1500 * attempt; // 1.5s, 3s, ...
+      console.warn(
+        `OpenAI rate limit (429) on attempt ${attempt}, retrying in ${waitMs}ms`
+      );
+      await sleep(waitMs);
+    }
+  }
 }
 
 export async function POST(req: NextRequest) {
@@ -262,41 +294,41 @@ export async function POST(req: NextRequest) {
       const { data: brandRows } = await supabase
         .from("brand_data_reference_v2")
         .select("brand,line_name,model_name")
-        .limit(30);
+        .limit(20); // 30→20 に削減してトークン節約
 
       if (brandRows?.length) {
         referenceBlocks.push(
-          "[ブランドバッグ系リファレンス]\\n" +
+          "[ブランドバッグ系リファレンス]\n" +
             brandRows
               .map(
                 (r: any) =>
                   `ブランド:${r.brand} / ライン:${r.line_name} / モデル:${r.model_name}`
               )
-              .join("\\n")
+              .join("\n")
         );
       }
 
       const { data: jewelryRows } = await supabase
         .from("jewelry_reference")
         .select("*")
-        .limit(30);
+        .limit(20); // 30→20
 
       if (jewelryRows?.length) {
         referenceBlocks.push(
-          "[ジュエリー系リファレンス]\\n" +
-            jewelryRows.map((r: any) => JSON.stringify(r)).join("\\n")
+          "[ジュエリー系リファレンス]\n" +
+            jewelryRows.map((r: any) => JSON.stringify(r)).join("\n")
         );
       }
 
       const { data: kinkoRows } = await supabase
         .from("kinko_urushi_reference")
         .select("*")
-        .limit(30);
+        .limit(20); // 30→20
 
       if (kinkoRows?.length) {
         referenceBlocks.push(
-          "[金工・漆器系リファレンス]\\n" +
-            kinkoRows.map((r: any) => JSON.stringify(r)).join("\\n")
+          "[金工・漆器系リファレンス]\n" +
+            kinkoRows.map((r: any) => JSON.stringify(r)).join("\n")
         );
       }
 
@@ -305,17 +337,17 @@ export async function POST(req: NextRequest) {
         .select(
           "genre,category,author_name,style_traits,stroke_traits,signature_traits,seal_text,seal_shape_color,seal_position,authenticity_points,common_fake_patterns,era,school_lineage"
         )
-        .limit(50);
+        .limit(30); // 50→30
 
       if (wamonRows?.length) {
         referenceBlocks.push(
-          "[和物（書画・陶磁器・茶道具・箱書）リファレンス]\\n" +
+          "[和物（書画・陶磁器・茶道具・箱書）リファレンス]\n" +
             wamonRows
               .map(
                 (r: any) =>
                   `ジャンル:${r.genre} / カテゴリ:${r.category} / 作家:${r.author_name} / 筆跡:${r.stroke_traits} / 落款:${r.signature_traits} / 印文:${r.seal_text} / 真贋ポイント:${r.authenticity_points} / 贋作パターン:${r.common_fake_patterns} / 時代:${r.era} / 流派:${r.school_lineage}`
               )
-              .join("\\n")
+              .join("\n")
         );
       }
 
@@ -326,24 +358,24 @@ export async function POST(req: NextRequest) {
         )
         .eq("is_trainable", true)
         .order("created_at", { ascending: false })
-        .limit(50);
+        .limit(30); // 50→30
 
       if (trainingRows?.length) {
         referenceBlocks.push(
-          "[過去の教師データ]\\n" +
+          "[過去の教師データ]\n" +
             trainingRows
               .map(
                 (r: any) =>
                   `ジャンル:${r.genre} / 商品:${r.item_name} / 信頼度:${r.confidence}% / 概要:${r.output_text}`
               )
-              .join("\\n")
+              .join("\n")
         );
       }
     } catch (e) {
       console.error("リファレンス取得エラー", e);
     }
 
-    const referenceText = referenceBlocks.join("\\n\\n");
+    const referenceText = referenceBlocks.join("\n\n");
 
     const content: any[] = [
       { type: "input_text", text: SYSTEM_PROMPT },
@@ -352,16 +384,17 @@ export async function POST(req: NextRequest) {
             type: "input_text",
             text:
               referenceText +
-              "\\n---\\n上記の参考情報のうち画像に最も近いものを優先的に活用してください。",
+              "\n---\n上記の参考情報のうち画像に最も近いものを優先的に活用してください。",
           }
         : null,
       ...images.map((u) => ({ type: "input_image", image_url: u })),
     ].filter(Boolean);
 
-    // ===== OpenAI リクエスト =====
-    const aiRes: any = await openai.responses.create({
+    // ===== OpenAI リクエスト（レート制限対策付き） =====
+    const aiRes: any = await callOpenAIWithRetry(openai, {
       model: "gpt-4.1",
       temperature: 0.2,
+      max_output_tokens: 1800, // ★ 出力トークンを抑制してTPM消費を軽減
       input: [{ role: "user", content }],
     });
 
@@ -399,7 +432,7 @@ export async function POST(req: NextRequest) {
 
     let output_text = output_text_raw;
     if (!output_text.includes("【想定相場】")) {
-      const sep = output_text.endsWith("\\n") ? "" : "\\n";
+      const sep = output_text.endsWith("\n") ? "" : "\n";
       output_text = output_text + sep + "【想定相場】不明（データ不足）";
     }
 
@@ -481,6 +514,20 @@ export async function POST(req: NextRequest) {
     );
   } catch (e: any) {
     console.error("assess error", e);
+
+    const status = e?.status ?? e?.response?.status;
+    if (status === 429) {
+      // ここに来るのは「リトライしてもまだレート制限」のケース
+      return NextResponse.json(
+        {
+          ok: false,
+          error:
+            "AI側のレート制限に達しています。少し時間をおいて再度お試しください。",
+        },
+        { status: 429 }
+      );
+    }
+
     return NextResponse.json(
       {
         ok: false,
