@@ -500,6 +500,28 @@ export async function POST(req: NextRequest) {
       console.error("training_items 保存中の例外:", e);
     }
 
+    // ★ キュー方式の布石：assessment_jobs にも「完了済みジョブ」として保存
+    try {
+      await supabase.from("assessment_jobs").insert([
+        {
+          user_id,
+          image_urls: images,
+          status: "done",
+          result: {
+            output_text,
+            mercari_title,
+            mercari_description,
+            confidence,
+            genre,
+            item_name,
+          },
+          error_message: null,
+        },
+      ]);
+    } catch (e) {
+      console.error("assessment_jobs 保存中の例外:", e);
+    }
+
     return NextResponse.json(
       {
         ok: true,
