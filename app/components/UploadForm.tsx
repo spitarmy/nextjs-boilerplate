@@ -4,11 +4,15 @@
 import React, { useState, useEffect } from "react";
 import { supabase } from "../../lib/supabase";
 
+type ListingMode = "flea" | "auction";
+
 type AssessResponse = {
   ok: boolean;
   output_text?: string;
   mercari_title?: string;
   mercari_description?: string;
+  auction_title?: string;
+  listing_mode?: ListingMode;
   confidence?: number | null;
   genre?: string | null;
   item_name?: string | null;
@@ -58,6 +62,9 @@ export default function UploadForm() {
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
+
+  // 追加：出力モード（フリマ / オークション）
+  const [listingMode, setListingMode] = useState<ListingMode>("flea");
 
   // 画面幅に応じてレイアウト切り替え（スマホは1カラム）
   const [isMobile, setIsMobile] = useState(false);
@@ -132,22 +139,22 @@ export default function UploadForm() {
       const res = await fetch("/api/assess", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image_urls: imageUrls, user_id: userId }),
+        body: JSON.stringify({
+          image_urls: imageUrls,
+          user_id: userId,
+          listing_mode: listingMode,
+        }),
       });
 
       const json: AssessResponse = await res.json();
       if (!res.ok || !json.ok) {
-        setErrorMsg(
-          json.error || "査定に失敗しました。時間をおいて再度お試しください。"
-        );
+        setErrorMsg(json.error || "査定に失敗しました。時間をおいて再度お試しください。");
       } else {
         setResult(json);
       }
     } catch (err) {
       console.error(err);
-      setErrorMsg(
-        "通信エラーが発生しました。ネットワーク環境を確認してください。"
-      );
+      setErrorMsg("通信エラーが発生しました。ネットワーク環境を確認してください。");
     } finally {
       setLoading(false);
     }
@@ -167,9 +174,7 @@ export default function UploadForm() {
     <div
       style={{
         display: isMobile ? "block" : "grid",
-        gridTemplateColumns: isMobile
-          ? undefined
-          : "minmax(0, 1.05fr) minmax(0, 1.25fr)",
+        gridTemplateColumns: isMobile ? undefined : "minmax(0, 1.05fr) minmax(0, 1.25fr)",
         gap: isMobile ? 20 : 24,
         alignItems: "flex-start",
       }}
@@ -177,8 +182,7 @@ export default function UploadForm() {
       {/* 左側：アップロード＆説明 */}
       <section
         style={{
-          background:
-            "radial-gradient(circle at top left, rgba(31,41,55,0.3), rgba(15,23,42,0.98))",
+          background: "radial-gradient(circle at top left, rgba(31,41,55,0.3), rgba(15,23,42,0.98))",
           borderRadius: isMobile ? 18 : 20,
           padding: isMobile ? 18 : 24,
           border: "1px solid rgba(15,23,42,0.9)",
@@ -186,38 +190,76 @@ export default function UploadForm() {
           color: "#e5e7eb",
         }}
       >
-        <h2
-          style={{
-            fontSize: isMobile ? 18 : 20,
-            fontWeight: 700,
-            margin: "0 0 4px",
-          }}
-        >
+        <h2 style={{ fontSize: isMobile ? 18 : 20, fontWeight: 700, margin: "0 0 4px" }}>
           査定する
         </h2>
-        <p
-          style={{
-            fontSize: 12,
-            color: "#d1d5db",
-            margin: "0 0 14px",
-            lineHeight: 1.7,
-          }}
-        >
+        <p style={{ fontSize: 12, color: "#d1d5db", margin: "0 0 14px", lineHeight: 1.7 }}>
           最大 {MAX_FILES} 枚までアップロードできます。画像は長辺800pxに自動圧縮され、
-          真贋・相場・フリマサイト用タイトル／説明文まで一括生成します。
+          真贋・相場・出品用タイトル／説明文まで一括生成します。
         </p>
 
+        {/* 追加：モード切替（見た目を崩さず小さく） */}
+        <div
+          style={{
+            marginBottom: 12,
+            padding: 10,
+            borderRadius: 14,
+            border: "1px solid rgba(148,163,184,0.35)",
+            backgroundColor: "rgba(2,6,23,0.55)",
+          }}
+        >
+          <div style={{ fontSize: 12, color: "#e5e7eb", marginBottom: 8, fontWeight: 600 }}>
+            出力モード
+          </div>
+
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              type="button"
+              onClick={() => setListingMode("flea")}
+              style={{
+                flex: 1,
+                padding: "9px 10px",
+                borderRadius: 999,
+                border: listingMode === "flea" ? "1px solid rgba(99,102,241,0.9)" : "1px solid rgba(148,163,184,0.35)",
+                background: listingMode === "flea" ? "linear-gradient(to right, rgba(37,99,235,0.35), rgba(79,70,229,0.35))" : "rgba(2,6,23,0.35)",
+                color: "#e5e7eb",
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              フリマ向け
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setListingMode("auction")}
+              style={{
+                flex: 1,
+                padding: "9px 10px",
+                borderRadius: 999,
+                border: listingMode === "auction" ? "1px solid rgba(99,102,241,0.9)" : "1px solid rgba(148,163,184,0.35)",
+                background: listingMode === "auction" ? "linear-gradient(to right, rgba(37,99,235,0.35), rgba(79,70,229,0.35))" : "rgba(2,6,23,0.35)",
+                color: "#e5e7eb",
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              オークション向け
+            </button>
+          </div>
+
+          <div style={{ marginTop: 8, fontSize: 11, color: "#9ca3af", lineHeight: 1.6 }}>
+            ※出力内にサイト名は明記しません。オークション向けはタイトルが検索重視になります。
+          </div>
+        </div>
+
         <form onSubmit={handleSubmit}>
-          <label
-            style={{
-              display: "block",
-              fontSize: 13,
-              marginBottom: 8,
-              color: "#f9fafb",
-            }}
-          >
+          <label style={{ display: "block", fontSize: 13, marginBottom: 8, color: "#f9fafb" }}>
             商品画像（1〜{MAX_FILES} 枚）
           </label>
+
           <div
             style={{
               marginBottom: 10,
@@ -234,14 +276,7 @@ export default function UploadForm() {
               onChange={handleFileChange}
               style={{ fontSize: 13, color: "#e5e7eb" }}
             />
-            <div
-              style={{
-                fontSize: 11,
-                color: "#9ca3af",
-                marginTop: 8,
-                lineHeight: 1.6,
-              }}
-            >
+            <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 8, lineHeight: 1.6 }}>
               ・1枚あたり最大10MB・合計25MBまでアップロード可能です。
               <br />
               ・査定に不要な背景はなるべくカットすると精度が上がります。
@@ -249,14 +284,7 @@ export default function UploadForm() {
           </div>
 
           {files.length > 0 && (
-            <ul
-              style={{
-                fontSize: 12,
-                margin: "0 0 12px",
-                paddingLeft: 18,
-                color: "#e5e7eb",
-              }}
-            >
+            <ul style={{ fontSize: 12, margin: "0 0 12px", paddingLeft: 18, color: "#e5e7eb" }}>
               {files.map((f, i) => (
                 <li key={i}>
                   {f.name}（{Math.round(f.size / 1024)} KB）
@@ -282,8 +310,7 @@ export default function UploadForm() {
               fontWeight: 600,
               cursor: loading || files.length === 0 ? "default" : "pointer",
               opacity: loading ? 0.9 : 1,
-              boxShadow:
-                "0 14px 35px rgba(37,99,235,0.45), 0 0 0 1px rgba(148,163,184,0.4)",
+              boxShadow: "0 14px 35px rgba(37,99,235,0.45), 0 0 0 1px rgba(148,163,184,0.4)",
             }}
           >
             {loading ? "AIが査定しています…" : "AI査定を開始する"}
@@ -322,8 +349,7 @@ export default function UploadForm() {
               borderRadius: 16,
               padding: isMobile ? 14 : 16,
               border: "1px dashed rgba(148,163,184,0.55)",
-              background:
-                "linear-gradient(135deg, rgba(248,250,252,0.95), rgba(226,232,240,0.95))",
+              background: "linear-gradient(135deg, rgba(248,250,252,0.95), rgba(226,232,240,0.95))",
               color: "#4b5563",
               fontSize: 12,
               lineHeight: 1.7,
@@ -336,7 +362,7 @@ export default function UploadForm() {
             <br />
             ・想定相場（控えめレンジ）
             <br />
-            ・フリマサイト用タイトル／説明文
+            ・出品用タイトル／説明文
             <br />
             が自動生成されます。
           </div>
@@ -349,45 +375,18 @@ export default function UploadForm() {
               style={{
                 padding: isMobile ? 14 : 16,
                 borderRadius: 16,
-                background:
-                  "radial-gradient(circle at top left, rgba(30,64,175,0.15), #0f172a)",
+                background: "radial-gradient(circle at top left, rgba(30,64,175,0.15), #0f172a)",
                 border: "1px solid rgba(129,140,248,0.4)",
                 color: "#e5e7eb",
               }}
             >
-              <h3
-                style={{
-                  margin: "0 0 8px",
-                  fontSize: 14,
-                  fontWeight: 600,
-                }}
-              >
-                査定コメント
-              </h3>
-              <p
-                style={{
-                  whiteSpace: "pre-wrap",
-                  fontSize: 13,
-                  lineHeight: 1.7,
-                }}
-              >
-                {result.output_text}
-              </p>
-              <div
-                style={{
-                  marginTop: 8,
-                  fontSize: 11,
-                  color: "#cbd5f5",
-                }}
-              >
-                信頼度:{" "}
-                {typeof result.confidence === "number"
-                  ? `${result.confidence}%`
-                  : "不明"}
-                {"　"}
-                ジャンル: {result.genre ?? "不明"}
-                {"　"}
-                型名: {result.item_name ?? "不明"}
+              <h3 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 600 }}>査定コメント</h3>
+              <p style={{ whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.7 }}>{result.output_text}</p>
+              <div style={{ marginTop: 8, fontSize: 11, color: "#cbd5f5" }}>
+                信頼度: {typeof result.confidence === "number" ? `${result.confidence}%` : "不明"}
+                {"　"}ジャンル: {result.genre ?? "不明"}
+                {"　"}型名: {result.item_name ?? "不明"}
+                {"　"}モード: {result.listing_mode === "auction" ? "オークション" : "フリマ"}
               </div>
             </section>
 
@@ -401,24 +400,8 @@ export default function UploadForm() {
                 color: "#e5e7eb",
               }}
             >
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  marginBottom: 8,
-                  gap: 8,
-                }}
-              >
-                <h3
-                  style={{
-                    margin: 0,
-                    fontSize: 14,
-                    fontWeight: 600,
-                  }}
-                >
-                  フリマサイト用タイトル
-                </h3>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8 }}>
+                <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>フリマ用タイトル</h3>
                 <button
                   type="button"
                   onClick={() => copyToClipboard(result.mercari_title)}
@@ -427,8 +410,7 @@ export default function UploadForm() {
                     padding: "4px 10px",
                     borderRadius: 999,
                     border: "1px solid rgba(148,163,184,0.7)",
-                    background:
-                      "linear-gradient(to right, #020617, #020617)",
+                    background: "linear-gradient(to right, #020617, #020617)",
                     color: "#e5e7eb",
                     cursor: "pointer",
                     whiteSpace: "nowrap",
@@ -452,6 +434,54 @@ export default function UploadForm() {
               />
             </section>
 
+            {/* オークション用タイトル（追加） */}
+            <section
+              style={{
+                padding: isMobile ? 14 : 16,
+                borderRadius: 16,
+                background: "#0b1120",
+                border: "1px solid rgba(55,65,81,0.9)",
+                color: "#e5e7eb",
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8 }}>
+                <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>オークション用タイトル</h3>
+                <button
+                  type="button"
+                  onClick={() => copyToClipboard(result.auction_title)}
+                  style={{
+                    fontSize: 11,
+                    padding: "4px 10px",
+                    borderRadius: 999,
+                    border: "1px solid rgba(148,163,184,0.7)",
+                    background: "linear-gradient(to right, #020617, #020617)",
+                    color: "#e5e7eb",
+                    cursor: "pointer",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  コピー
+                </button>
+              </div>
+              <input
+                readOnly
+                value={result.auction_title ?? ""}
+                placeholder="（生成されます）"
+                style={{
+                  width: "100%",
+                  padding: "8px 10px",
+                  borderRadius: 10,
+                  border: "1px solid rgba(55,65,81,0.9)",
+                  fontSize: 13,
+                  backgroundColor: "#020617",
+                  color: "#e5e7eb",
+                }}
+              />
+              <div style={{ marginTop: 8, fontSize: 11, color: "#9ca3af", lineHeight: 1.6 }}>
+                ※半角は0.5文字相当としてカウントし、上限内に収まるよう自動調整しています。
+              </div>
+            </section>
+
             {/* フリマサイト用説明文 */}
             <section
               style={{
@@ -462,36 +492,17 @@ export default function UploadForm() {
                 color: "#e5e7eb",
               }}
             >
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  marginBottom: 8,
-                  gap: 8,
-                }}
-              >
-                <h3
-                  style={{
-                    margin: 0,
-                    fontSize: 14,
-                    fontWeight: 600,
-                  }}
-                >
-                  フリマサイト用説明文
-                </h3>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8 }}>
+                <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>フリマ用説明文</h3>
                 <button
                   type="button"
-                  onClick={() =>
-                    copyToClipboard(result.mercari_description)
-                  }
+                  onClick={() => copyToClipboard(result.mercari_description)}
                   style={{
                     fontSize: 11,
                     padding: "4px 10px",
                     borderRadius: 999,
                     border: "1px solid rgba(148,163,184,0.7)",
-                    background:
-                      "linear-gradient(to right, #020617, #020617)",
+                    background: "linear-gradient(to right, #020617, #020617)",
                     color: "#e5e7eb",
                     cursor: "pointer",
                     whiteSpace: "nowrap",
