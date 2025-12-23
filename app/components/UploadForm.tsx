@@ -63,7 +63,7 @@ export default function UploadForm() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
 
-  // 追加：出力モード（フリマ / オークション）
+  // 出力モード（フリマ / オークション）
   const [listingMode, setListingMode] = useState<ListingMode>("flea");
 
   // 画面幅に応じてレイアウト切り替え（スマホは1カラム）
@@ -170,6 +170,10 @@ export default function UploadForm() {
     }
   };
 
+  // ★ 重要：表示は「今のタブ（listingMode）」を基準に切り替える
+  const isFlea = listingMode === "flea";
+  const isAuction = listingMode === "auction";
+
   return (
     <div
       style={{
@@ -198,7 +202,7 @@ export default function UploadForm() {
           真贋・相場・出品用タイトル／説明文まで一括生成します。
         </p>
 
-        {/* 追加：モード切替（見た目を崩さず小さく） */}
+        {/* モード切替 */}
         <div
           style={{
             marginBottom: 12,
@@ -334,7 +338,7 @@ export default function UploadForm() {
         )}
       </section>
 
-      {/* 右側：査定結果カード（スマホでは下に縦並び） */}
+      {/* 右側：査定結果カード */}
       <section
         style={{
           marginTop: isMobile ? 16 : 0,
@@ -382,151 +386,162 @@ export default function UploadForm() {
             >
               <h3 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 600 }}>査定コメント</h3>
               <p style={{ whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.7 }}>{result.output_text}</p>
+
+              {/* ★ ここも「今のタブ」を表示する（結果に依存しない） */}
               <div style={{ marginTop: 8, fontSize: 11, color: "#cbd5f5" }}>
                 信頼度: {typeof result.confidence === "number" ? `${result.confidence}%` : "不明"}
                 {"　"}ジャンル: {result.genre ?? "不明"}
                 {"　"}型名: {result.item_name ?? "不明"}
-                {"　"}モード: {result.listing_mode === "auction" ? "オークション" : "フリマ"}
+                {"　"}モード: {isAuction ? "オークション" : "フリマ"}
               </div>
             </section>
 
-            {/* フリマサイト用タイトル */}
-            <section
-              style={{
-                padding: isMobile ? 14 : 16,
-                borderRadius: 16,
-                background: "#0b1120",
-                border: "1px solid rgba(55,65,81,0.9)",
-                color: "#e5e7eb",
-              }}
-            >
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8 }}>
-                <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>フリマ用タイトル</h3>
-                <button
-                  type="button"
-                  onClick={() => copyToClipboard(result.mercari_title)}
-                  style={{
-                    fontSize: 11,
-                    padding: "4px 10px",
-                    borderRadius: 999,
-                    border: "1px solid rgba(148,163,184,0.7)",
-                    background: "linear-gradient(to right, #020617, #020617)",
-                    color: "#e5e7eb",
-                    cursor: "pointer",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  コピー
-                </button>
-              </div>
-              <input
-                readOnly
-                value={result.mercari_title ?? ""}
-                style={{
-                  width: "100%",
-                  padding: "8px 10px",
-                  borderRadius: 10,
-                  border: "1px solid rgba(55,65,81,0.9)",
-                  fontSize: 13,
-                  backgroundColor: "#020617",
-                  color: "#e5e7eb",
-                }}
-              />
-            </section>
+            {/* ★ ここから「タブに応じて表示を切り替える」 */}
 
-            {/* オークション用タイトル（追加） */}
-            <section
-              style={{
-                padding: isMobile ? 14 : 16,
-                borderRadius: 16,
-                background: "#0b1120",
-                border: "1px solid rgba(55,65,81,0.9)",
-                color: "#e5e7eb",
-              }}
-            >
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8 }}>
-                <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>オークション用タイトル</h3>
-                <button
-                  type="button"
-                  onClick={() => copyToClipboard(result.auction_title)}
+            {/* フリマ用（タブがフリマのときだけ表示） */}
+            {isFlea && (
+              <>
+                {/* フリマ用タイトル */}
+                <section
                   style={{
-                    fontSize: 11,
-                    padding: "4px 10px",
-                    borderRadius: 999,
-                    border: "1px solid rgba(148,163,184,0.7)",
-                    background: "linear-gradient(to right, #020617, #020617)",
+                    padding: isMobile ? 14 : 16,
+                    borderRadius: 16,
+                    background: "#0b1120",
+                    border: "1px solid rgba(55,65,81,0.9)",
                     color: "#e5e7eb",
-                    cursor: "pointer",
-                    whiteSpace: "nowrap",
                   }}
                 >
-                  コピー
-                </button>
-              </div>
-              <input
-                readOnly
-                value={result.auction_title ?? ""}
-                placeholder="（生成されます）"
-                style={{
-                  width: "100%",
-                  padding: "8px 10px",
-                  borderRadius: 10,
-                  border: "1px solid rgba(55,65,81,0.9)",
-                  fontSize: 13,
-                  backgroundColor: "#020617",
-                  color: "#e5e7eb",
-                }}
-              />
-              <div style={{ marginTop: 8, fontSize: 11, color: "#9ca3af", lineHeight: 1.6 }}>
-                ※半角は0.5文字相当としてカウントし、上限内に収まるよう自動調整しています。
-              </div>
-            </section>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8 }}>
+                    <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>フリマ用タイトル</h3>
+                    <button
+                      type="button"
+                      onClick={() => copyToClipboard(result.mercari_title)}
+                      style={{
+                        fontSize: 11,
+                        padding: "4px 10px",
+                        borderRadius: 999,
+                        border: "1px solid rgba(148,163,184,0.7)",
+                        background: "linear-gradient(to right, #020617, #020617)",
+                        color: "#e5e7eb",
+                        cursor: "pointer",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      コピー
+                    </button>
+                  </div>
+                  <input
+                    readOnly
+                    value={result.mercari_title ?? ""}
+                    style={{
+                      width: "100%",
+                      padding: "8px 10px",
+                      borderRadius: 10,
+                      border: "1px solid rgba(55,65,81,0.9)",
+                      fontSize: 13,
+                      backgroundColor: "#020617",
+                      color: "#e5e7eb",
+                    }}
+                  />
+                </section>
 
-            {/* フリマサイト用説明文 */}
-            <section
-              style={{
-                padding: isMobile ? 14 : 16,
-                borderRadius: 16,
-                background: "#0b1120",
-                border: "1px solid rgba(55,65,81,0.9)",
-                color: "#e5e7eb",
-              }}
-            >
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8 }}>
-                <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>フリマ用説明文</h3>
-                <button
-                  type="button"
-                  onClick={() => copyToClipboard(result.mercari_description)}
+                {/* フリマ用説明文 */}
+                <section
                   style={{
-                    fontSize: 11,
-                    padding: "4px 10px",
-                    borderRadius: 999,
-                    border: "1px solid rgba(148,163,184,0.7)",
-                    background: "linear-gradient(to right, #020617, #020617)",
+                    padding: isMobile ? 14 : 16,
+                    borderRadius: 16,
+                    background: "#0b1120",
+                    border: "1px solid rgba(55,65,81,0.9)",
                     color: "#e5e7eb",
-                    cursor: "pointer",
-                    whiteSpace: "nowrap",
                   }}
                 >
-                  コピー
-                </button>
-              </div>
-              <textarea
-                readOnly
-                value={result.mercari_description ?? ""}
-                rows={isMobile ? 6 : 8}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8 }}>
+                    <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>フリマ用説明文</h3>
+                    <button
+                      type="button"
+                      onClick={() => copyToClipboard(result.mercari_description)}
+                      style={{
+                        fontSize: 11,
+                        padding: "4px 10px",
+                        borderRadius: 999,
+                        border: "1px solid rgba(148,163,184,0.7)",
+                        background: "linear-gradient(to right, #020617, #020617)",
+                        color: "#e5e7eb",
+                        cursor: "pointer",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      コピー
+                    </button>
+                  </div>
+                  <textarea
+                    readOnly
+                    value={result.mercari_description ?? ""}
+                    rows={isMobile ? 6 : 8}
+                    style={{
+                      width: "100%",
+                      padding: "8px 10px",
+                      borderRadius: 10,
+                      border: "1px solid rgba(55,65,81,0.9)",
+                      fontSize: 13,
+                      backgroundColor: "#020617",
+                      color: "#e5e7eb",
+                      resize: "vertical",
+                    }}
+                  />
+                </section>
+              </>
+            )}
+
+            {/* オークション用（タブがオークションのときだけ表示） */}
+            {isAuction && (
+              <section
                 style={{
-                  width: "100%",
-                  padding: "8px 10px",
-                  borderRadius: 10,
+                  padding: isMobile ? 14 : 16,
+                  borderRadius: 16,
+                  background: "#0b1120",
                   border: "1px solid rgba(55,65,81,0.9)",
-                  fontSize: 13,
-                  backgroundColor: "#020617",
                   color: "#e5e7eb",
-                  resize: "vertical",
                 }}
-              />
-            </section>
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8 }}>
+                  <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>オークション用タイトル</h3>
+                  <button
+                    type="button"
+                    onClick={() => copyToClipboard(result.auction_title)}
+                    style={{
+                      fontSize: 11,
+                      padding: "4px 10px",
+                      borderRadius: 999,
+                      border: "1px solid rgba(148,163,184,0.7)",
+                      background: "linear-gradient(to right, #020617, #020617)",
+                      color: "#e5e7eb",
+                      cursor: "pointer",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    コピー
+                  </button>
+                </div>
+                <input
+                  readOnly
+                  value={result.auction_title ?? ""}
+                  placeholder="（生成されます）"
+                  style={{
+                    width: "100%",
+                    padding: "8px 10px",
+                    borderRadius: 10,
+                    border: "1px solid rgba(55,65,81,0.9)",
+                    fontSize: 13,
+                    backgroundColor: "#020617",
+                    color: "#e5e7eb",
+                  }}
+                />
+                <div style={{ marginTop: 8, fontSize: 11, color: "#9ca3af", lineHeight: 1.6 }}>
+                  ※半角は0.5文字相当としてカウントし、上限内に収まるよう自動調整しています。
+                </div>
+              </section>
+            )}
           </div>
         )}
       </section>
