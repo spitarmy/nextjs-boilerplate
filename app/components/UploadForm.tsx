@@ -19,14 +19,25 @@ type AssessResponse = {
   error?: string;
 };
 
-const MAX_FILES = 3;
+// ★ 5枚に変更
+const MAX_FILES = 5;
 
-// 元画像の容量制限
+// 元画像の容量制限（目安。送信上限とは別）
 const MAX_ORIGINAL_SIZE_PER_FILE = 10 * 1024 * 1024; // 10MB/枚
-const MAX_ORIGINAL_TOTAL_SIZE = 25 * 1024 * 1024; // 3枚合計 25MB
+const MAX_ORIGINAL_TOTAL_SIZE = 25 * 1024 * 1024; // 合計25MB（元画像の目安）
 
-// 圧縮後の長辺ピクセル
-const MAX_LONG_SIDE = 800;
+// ★ 5枚対応で安定させるため少し軽量化
+const MAX_LONG_SIDE = 720;
+const JPEG_QUALITY = 0.65;
+
+// ★ dataURL合計が大きいと /api/assess 送信で落ちやすいので事前ガード
+const MAX_TOTAL_DATAURL_BYTES = 6 * 1024 * 1024; // 6MB目安（安全側）
+
+function estimateDataUrlBytes(dataUrl: string): number {
+  const comma = dataUrl.indexOf(",");
+  const base64 = comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl;
+  return Math.floor((base64.length * 3) / 4);
+}
 
 async function fileToCompressedDataUrl(file: File): Promise<string> {
   const img = document.createElement("img");
@@ -51,7 +62,7 @@ async function fileToCompressedDataUrl(file: File): Promise<string> {
   canvas.height = height;
   ctx.drawImage(img, 0, 0, width, height);
 
-  const dataUrl = canvas.toDataURL("image/jpeg", 0.7);
+  const dataUrl = canvas.toDataURL("image/jpeg", JPEG_QUALITY);
   URL.revokeObjectURL(url);
   return dataUrl;
 }
@@ -90,6 +101,11 @@ export default function UploadForm() {
     setFiles(limited);
     setResult(null);
     setErrorMsg(null);
+
+    // 選びすぎたら案内（UX改善）
+    if (selected.length > MAX_FILES) {
+      setErrorMsg(`画像は最大 ${MAX_FILES} 枚までです。最初の ${MAX_FILES} 枚だけ使用します。`);
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -107,23 +123,19 @@ export default function UploadForm() {
       return;
     }
 
-    // 元画像の容量チェック
+    // 元画像の容量チェック（目安）
     let totalSize = 0;
     for (const f of files) {
       totalSize += f.size;
 
       if (f.size > MAX_ORIGINAL_SIZE_PER_FILE) {
-        setErrorMsg(
-          "元の画像ファイルの容量が大きすぎます（10MB超）。解像度を下げてからお試しください。"
-        );
+        setErrorMsg("元の画像ファイルの容量が大きすぎます（10MB超）。解像度を下げてからお試しください。");
         return;
       }
     }
 
     if (totalSize > MAX_ORIGINAL_TOTAL_SIZE) {
-      setErrorMsg(
-        "画像の合計容量が大きすぎます（25MB超）。枚数を減らすか解像度を下げてください。"
-      );
+      setErrorMsg("画像の合計容量が大きすぎます（25MB超）。枚数を減らすか解像度を下げてください。");
       return;
     }
 
@@ -131,8 +143,21 @@ export default function UploadForm() {
 
     try {
       const imageUrls: string[] = [];
+      let totalDataBytes = 0;
+
       for (const file of files) {
         const dataUrl = await fileToCompressedDataUrl(file);
+
+        // ★ 送信前にdataURL合計サイズをチェック（送信エラー回避）
+        totalDataBytes += estimateDataUrlBytes(dataUrl);
+        if (totalDataBytes > MAX_TOTAL_DATAURL_BYTES) {
+          setErrorMsg(
+            "画像データが大きすぎて送信時にエラーになる可能性があります。画像を減らすか、不要な背景をトリミングして再度お試しください。"
+          );
+          setLoading(false);
+          return;
+        }
+
         imageUrls.push(dataUrl);
       }
 
@@ -170,7 +195,7 @@ export default function UploadForm() {
     }
   };
 
-  // ★ 重要：表示は「今のタブ（listingMode）」を基準に切り替える
+  // ★ 表示は「今のタブ（listingMode）」を基準に切り替える
   const isFlea = listingMode === "flea";
   const isAuction = listingMode === "auction";
 
@@ -194,15 +219,13 @@ export default function UploadForm() {
           color: "#e5e7eb",
         }}
       >
-        <h2 style={{ fontSize: isMobile ? 18 : 20, fontWeight: 700, margin: "0 0 4px" }}>
-          査定する
-        </h2>
+        <h2 style={{ fontSize: isMobile ? 18 : 20, fontWeight: 700, margin: "0 0 4px" }}>査定する</h2>
         <p style={{ fontSize: 12, color: "#d1d5db", margin: "0 0 14px", lineHeight: 1.7 }}>
-          最大 {MAX_FILES} 枚までアップロードできます。画像は長辺800pxに自動圧縮され、
+          最大 {MAX_FILES} 枚までアップロードできます。画像は長辺{MAX_LONG_SIDE}pxに自動圧縮され、
           真贋・相場・出品用タイトル／説明文まで一括生成します。
         </p>
 
-        {/* モード切替 */}
+        {/* 出力モード */}
         <div
           style={{
             marginBottom: 12,
@@ -212,9 +235,7 @@ export default function UploadForm() {
             backgroundColor: "rgba(2,6,23,0.55)",
           }}
         >
-          <div style={{ fontSize: 12, color: "#e5e7eb", marginBottom: 8, fontWeight: 600 }}>
-            出力モード
-          </div>
+          <div style={{ fontSize: 12, color: "#e5e7eb", marginBottom: 8, fontWeight: 600 }}>出力モード</div>
 
           <div style={{ display: "flex", gap: 8 }}>
             <button
@@ -273,17 +294,11 @@ export default function UploadForm() {
               backgroundColor: "rgba(15,23,42,0.96)",
             }}
           >
-            <input
-              type="file"
-              accept="image/*"
-              multiple
-              onChange={handleFileChange}
-              style={{ fontSize: 13, color: "#e5e7eb" }}
-            />
+            <input type="file" accept="image/*" multiple onChange={handleFileChange} style={{ fontSize: 13, color: "#e5e7eb" }} />
             <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 8, lineHeight: 1.6 }}>
-              ・1枚あたり最大10MB・合計25MBまでアップロード可能です。
+              ・1枚あたり最大10MB・合計25MBまで（元画像の目安）
               <br />
-              ・査定に不要な背景はなるべくカットすると精度が上がります。
+              ・送信エラー回避のため、背景をなるべくトリミングしてください。
             </div>
           </div>
 
@@ -305,10 +320,7 @@ export default function UploadForm() {
               padding: "11px 16px",
               borderRadius: 999,
               border: "none",
-              background:
-                loading || files.length === 0
-                  ? "linear-gradient(to right, #4b5563, #6b7280)"
-                  : "linear-gradient(to right, #2563eb, #4f46e5)",
+              background: loading || files.length === 0 ? "linear-gradient(to right, #4b5563, #6b7280)" : "linear-gradient(to right, #2563eb, #4f46e5)",
               color: "#f9fafb",
               fontSize: 15,
               fontWeight: 600,
@@ -387,7 +399,6 @@ export default function UploadForm() {
               <h3 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 600 }}>査定コメント</h3>
               <p style={{ whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.7 }}>{result.output_text}</p>
 
-              {/* ★ ここも「今のタブ」を表示する（結果に依存しない） */}
               <div style={{ marginTop: 8, fontSize: 11, color: "#cbd5f5" }}>
                 信頼度: {typeof result.confidence === "number" ? `${result.confidence}%` : "不明"}
                 {"　"}ジャンル: {result.genre ?? "不明"}
@@ -395,8 +406,6 @@ export default function UploadForm() {
                 {"　"}モード: {isAuction ? "オークション" : "フリマ"}
               </div>
             </section>
-
-            {/* ★ ここから「タブに応じて表示を切り替える」 */}
 
             {/* フリマ用（タブがフリマのときだけ表示） */}
             {isFlea && (
