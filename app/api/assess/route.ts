@@ -12,115 +12,7 @@ const openai = new OpenAI({
 
 type ListingMode = "flea" | "auction";
 
-// ★ フォーマット固定＋コードブロック禁止（AI側にはJSONのみ出力させる）
-const SYSTEM_PROMPT = [
-  "あなたは骨董・ブランド・和装・雑貨・おもちゃ・時計・家電など幅広い商品を査定するプロの鑑定士AIです。",
-  "画像とリファレンス情報をもとに、真贋・型名・状態・相場・出品文を一貫した基準で出力します。",
-  "",
-  "【最重要方針】",
-  "・真贋判定は「確率」であり、保証ではない。",
-  "・偽物を本物と誤認するリスクを最小化しつつ、本物の中古商品を不必要に低評価しないこと。",
-  "・刻印/フォント/内部構造など“偽物が破綻しやすい部位”を最重視する。",
-  "・汚れ/スレ/自然劣化は中古では通常発生するため、偽物判定の主因にしない。",
-  "・一致点と不一致点を総合評価し、偏った判定にしない。",
-  "・複数商品が写っている場合は値の付きそうな物から査定コメントのみに記載、値段も一点ずつ記載する。フリマ用にはまとめで記載。",
-  "",
-  "【リファレンスの扱い】",
-  "・リファレンスは参考。しかし古い型・個体差・経年劣化で外れることもあるため、依存しすぎない。",
-  "・リファレンスに無い＝即偽物ではない。",
-  "・強い矛盾のみ偽物方向の根拠とする。",
-  "",
-  "【参照データの種類】",
-  "入力には以下のリファレンスブロックが含まれることがある：",
-  "　[ブランドバッグ系リファレンス]",
-  "　[ジュエリー系リファレンス]",
-  "　[金工・漆器系リファレンス]",
-  "　[和物（書画・陶磁器・茶道具・箱書）リファレンス]",
-  "　[過去の教師データ]",
-  "",
-  "・ブランド品／時計などではブランド系・ジュエリー系リファレンスを優先して照合すること。",
-  "・書画／掛軸／陶磁器／茶道具／箱書など和物ジャンルでは、和物リファレンスの「筆跡」「落款・サイン」「印文」「真贋ポイント」「贋作パターン」「時代・流派」を重視して照合すること。",
-  "・あなた自身の一般知識よりも、これらリファレンス情報との整合性を優先して判断すること。ただし依存はしすぎないこと。",
-  "",
-  "【真贋出力ルール】",
-  "以下のいずれかで出力する：",
-  "",
-  "1) 本物の可能性が高い（80〜90%）",
-  " （リファレンス整合性が高く、刻印/縫製/構造/筆跡/落款が本物特有である場合）",
-  "",
-  "2) 要追加写真（60〜79%）",
-  " （判断材料が不足している・照明や角度で刻印や落款が確認できない等）",
-  "",
-  "3) 偽物の可能性が高い（0〜59%）",
-  " （刻印フォント・構造・配置バランス・筆跡・落款に複数の矛盾がある場合）",
-  "",
-  "【想定相場】",
-  "・実売相場の下限〜中央値を控えめに提示。",
-  "・偽物可能性が高い場合は「査定・買取対象外」と明示。",
-  "・不明な場合は「【想定相場】不明（データ不足）」とする。",
-  "",
-  "【フリマ用タイトル（最大40文字）】",
-  "・ブランド名 / カテゴリ / 型名 / 状態 のみの簡潔構成",
-  "・重複ワード禁止",
-  "・item_name を必ず含める。ただし英単語の item_name という文字列をタイトルに書いてはならない",
-  "・余計な説明ワードは追加しない",
-  "",
-  "【オークション用タイトル（最大65カウント想定）】",
-  "・サイト名は絶対に明記しない（例：ヤフオク/メルカリ等は書かない）。",
-  "・検索されやすい順に、ブランド/型番/素材/サイズ/付属/状態を並べる。",
-  "・フリマ文脈の語（即購入/早い者勝ち等）は入れない。",
-  "",
-  "【フリマ説明文（200〜400文字）】",
-  "構成：",
-  "①商品概要  ",
-  "②状態説明  ",
-  "③付属品  ",
-  "④注意事項  ",
-  "⑤検索キーワード  ",
-  "金額・断定真贋表現は入れない。",
-  "",
-  "【JSONルール】",
-  "返答はJSONのみ。",
-  "キーは以下の8つ：",
-  "output_text / mercari_title / mercari_description / auction_title / listing_mode / confidence / genre / item_name",
-  "",
-  "【JSONキーの意味と制約】",
-  "・listing_mode（\"flea\" または \"auction\"）",
-  "",
-  "・output_text（査定コメント全文）",
-  "　- 必ず以下の4行構成（＋必要に応じて1〜2行の補足）とする：",
-  "　　1行目： 【真贋】〜",
-  "　　2行目： 【型名】〜",
-  "　　3行目： 【状態】〜",
-  "　　4行目： 【想定相場】◯◯,◯◯◯〜◯◯,◯◯◯円前後（◯◯基準）",
-  "　　5行目以降（任意）：短い補足があれば1〜2行まで",
-  "　- 【想定相場】がどうしても出せない場合：",
-  "　　　【想定相場】不明（データ不足／参考事例が少ないため）",
-  "",
-  "・mercari_title（フリマ用タイトル。最大40文字以内）",
-  "　- 最大40文字以内に収めること（超えそうな場合は語尾から安全にカット）。",
-  "　- item_name が含まれていなければ末尾に必ず含める。ただし英単語の「item_name」という文字列をタイトルに書いてはならない。",
-  "",
-  "・auction_title（オークション用タイトル。最大65カウント想定）",
-  "　- サイト名の明記は禁止。",
-  "　- ブランド/型番/素材/サイズ/付属/状態を簡潔に。",
-  "",
-  "・mercari_description（フリマ用説明文。200〜400文字）",
-  "　- 構成：商品概要 → 状態詳細 → 付属品 → 注意事項 → 検索用キーワード1行。",
-  "　- 金額は絶対に書かない。",
-  "　- 真贋については「目視判断／AIによる目安」であることを曖昧に伝え、断定しない。",
-  "",
-  "・confidence（0〜100の整数）",
-  "・genre（「ブランドバッグ」「時計」「家電」「書画」「陶磁器」など大まかなジャンル名）",
-  "・item_name（型名・商品名。1行で簡潔に）",
-  "",
-  "【重要な禁止事項】",
-  "・JSONの外側に一文字でも余計なテキストを書かないこと（挨拶・説明・コードブロックなどは禁止）。",
-  "・真贋について「本物です」「正規品です」「確実です」等の断定表現は禁止。",
-  "・リファレンスと矛盾する場合に、自分の一般知識を優先してはいけない。",
-  "",
-  "以上を厳守し、偽物を本物と誤判定しないことを最重視して出力してください。"
-].join("\n");
+type PriceMode = "normal" | "junk";
 
 // ===== タイトル用トークン化ヘルパー =====
 function tokenizeForTitle(s: string): string[] {
@@ -131,11 +23,7 @@ function tokenizeForTitle(s: string): string[] {
 }
 
 // ===== メルカリタイトル最適化ヘルパー =====
-function buildMercariTitle(
-  rawTitle: unknown,
-  item_name: string | null,
-  output_text: string
-): string {
+function buildMercariTitle(rawTitle: unknown, item_name: string | null, output_text: string): string {
   const baseName = (item_name ?? "").trim();
   const originalTitle = typeof rawTitle === "string" ? rawTitle.trim() : "";
 
@@ -214,24 +102,17 @@ function trimYahooLike(str: string, max: number): string {
 }
 
 // ===== オークション用タイトル組み立て（AIが出したのを優先しつつ丸める） =====
-function buildAuctionTitle(
-  rawTitle: unknown,
-  item_name: string | null,
-  mercari_title: string,
-  output_text: string
-): string {
+function buildAuctionTitle(rawTitle: unknown, item_name: string | null, mercari_title: string, output_text: string): string {
   const original = typeof rawTitle === "string" ? rawTitle.trim() : "";
   let base = original || (item_name ?? "").trim() || mercari_title.trim();
   if (!base) return "";
 
-  // サイト名っぽい単語を一応除去（万が一AIが出しても掃除）
   base = base
     .replace(/ヤフオク|Yahoo!?\s*オークション|Yahoo!?\s*Auction/gi, "")
     .replace(/メルカリ|Mercari/gi, "")
     .replace(/\s{2,}/g, " ")
     .trim();
 
-  // 状態ヒントを軽く補強（過剰に盛らない）
   const hints: string[] = [];
   if (/未使用|新品同様/.test(output_text) && !base.includes("未使用")) {
     hints.push("未使用に近い");
@@ -245,7 +126,6 @@ function buildAuctionTitle(
     if (add) title = `${title} ${add}`.trim();
   }
 
-  // 65カウントに丸め（半角0.5）
   if (countYahooLike(title) > 65) {
     title = trimYahooLike(title, 65);
   }
@@ -258,11 +138,7 @@ function sleep(ms: number) {
 }
 
 // ===== OpenAI呼び出し（429時はリトライ） =====
-async function callOpenAIWithRetry(
-  client: OpenAI,
-  payload: any,
-  maxRetries = 2
-): Promise<any> {
+async function callOpenAIWithRetry(client: OpenAI, payload: any, maxRetries = 2): Promise<any> {
   let attempt = 0;
   while (true) {
     try {
@@ -278,21 +154,78 @@ async function callOpenAIWithRetry(
   }
 }
 
+// ===== プロンプト（固定部分） =====
+const SYSTEM_PROMPT_BASE = [
+  "あなたは骨董・ブランド・和装・雑貨・おもちゃ・時計・家電など幅広い商品を査定するプロの鑑定士AIです。",
+  "画像とリファレンス情報をもとに、真贋・型名・状態・相場・出品文を一貫した基準で出力します。",
+  "",
+  "【最重要方針】",
+  "・真贋判定は「確率」であり、保証ではない。",
+  "・偽物を本物と誤認するリスクを最小化しつつ、本物の中古商品を不必要に低評価しないこと。",
+  "・刻印/フォント/内部構造など“偽物が破綻しやすい部位”を最重視する。",
+  "・汚れ/スレ/自然劣化は中古では通常発生するため、偽物判定の主因にしない。",
+  "・一致点と不一致点を総合評価し、偏った判定にしない。",
+  "・複数商品が写っている場合は値の付きそうな物から査定コメントのみに記載、値段も一点ずつ記載する。フリマ用にはまとめで記載。",
+  "",
+  "【リファレンスの扱い】",
+  "・リファレンスは参考。しかし古い型・個体差・経年劣化で外れることもあるため、依存しすぎない。",
+  "・リファレンスに無い＝即偽物ではない。",
+  "・強い矛盾のみ偽物方向の根拠とする。",
+  "",
+  "【参照データの種類】",
+  "入力には以下のリファレンスブロックが含まれることがある：",
+  "　[ブランドバッグ系リファレンス]",
+  "　[ジュエリー系リファレンス]",
+  "　[金工・漆器系リファレンス]",
+  "　[和物（書画・陶磁器・茶道具・箱書）リファレンス]",
+  "　[過去の教師データ]",
+  "",
+  "・ブランド品／時計などではブランド系・ジュエリー系リファレンスを優先して照合すること。",
+  "・書画／掛軸／陶磁器／茶道具／箱書など和物ジャンルでは、和物リファレンスの「筆跡」「落款・サイン」「印文」「真贋ポイント」「贋作パターン」「時代・流派」を重視して照合すること。",
+  "",
+  "【真贋出力ルール】",
+  "以下のいずれかで出力する：",
+  "1) 本物の可能性が高い（80〜90%）",
+  "2) 要追加写真（60〜79%）",
+  "3) 偽物の可能性が高い（0〜59%）",
+  "",
+  "【相場ルール】",
+  "・通常は実売相場の下限〜中央値を控えめに提示。",
+  "・不明な場合は「【想定相場】不明（データ不足）」とする。",
+  "・ジャンクモードの場合は、【想定相場】に「ジャンク実売レンジ」を最優先で書く（動作未確認・現状渡し前提）。",
+  "",
+  "【JSONルール】",
+  "返答はJSONのみ。",
+  "キーは以下の8つ：",
+  "output_text / mercari_title / mercari_description / auction_title / listing_mode / confidence / genre / item_name",
+  "",
+  "【output_text（査定コメント）フォーマット】",
+  "必ず以下の4行構成（＋必要に応じて補足1〜2行）:",
+  "1行目： 【真贋】〜",
+  "2行目： 【型名】〜",
+  "3行目： 【状態】〜",
+  "4行目： 【想定相場】◯◯,◯◯◯〜◯◯,◯◯◯円前後（◯◯基準）",
+  "※ジャンクモード時の4行目は「ジャンク実売レンジ（参照元/件数があれば併記）」を必ず含める。",
+  "",
+  "【モード別の“生成節約ルール”（重要）】",
+  "・listing_mode=flea のとき：mercari_title と mercari_description のみ作る。auction_title は必ず空文字 \"\"。",
+  "・listing_mode=auction のとき：auction_title のみ作る。mercari_title と mercari_description は必ず空文字 \"\"。",
+  "・ただし output_text/confidence/genre/item_name は常に出す。",
+  "",
+  "【重要な禁止事項】",
+  "・JSONの外側に一文字でも余計なテキストを書かない（挨拶・説明・コードブロック禁止）。",
+  "・真贋について「本物です」「正規品です」「確実です」等の断定表現は禁止。",
+].join("\n");
+
 export async function POST(req: NextRequest) {
   try {
     if (!process.env.OPENAI_API_KEY) {
-      return NextResponse.json(
-        { ok: false, error: "OPENAI_API_KEY が不足しています。" },
-        { status: 500 }
-      );
+      return NextResponse.json({ ok: false, error: "OPENAI_API_KEY が不足しています。" }, { status: 500 });
     }
 
     const body = await req.json().catch(() => null);
     if (!body) {
-      return NextResponse.json(
-        { ok: false, error: "JSON形式のリクエストを送ってください。" },
-        { status: 400 }
-      );
+      return NextResponse.json({ ok: false, error: "JSON形式のリクエストを送ってください。" }, { status: 400 });
     }
 
     const user_id: string | null =
@@ -300,8 +233,9 @@ export async function POST(req: NextRequest) {
         ? (body as any).user_id
         : null;
 
-    const listing_mode: ListingMode =
-      (body as any).listing_mode === "auction" ? "auction" : "flea";
+    const listing_mode: ListingMode = (body as any).listing_mode === "auction" ? "auction" : "flea";
+
+    const price_mode: PriceMode = (body as any).junk_mode === true ? "junk" : "normal";
 
     // 画像を抽出
     const raw = (body as any).image_urls ?? (body as any).images ?? null;
@@ -324,37 +258,54 @@ export async function POST(req: NextRequest) {
     }
 
     // ===== Supabase リファレンス収集 =====
-    let referenceBlocks: string[] = [];
+    const referenceBlocks: string[] = [];
 
+    // ★ ブランド/実売レンジ系（あなたが提示したカラムを優先して出す）
     try {
       const { data: brandRows } = await supabase
         .from("brand_data_reference_v2")
-        .select("brand,line_name,model_name")
-        .limit(20);
+        .select(
+          "brand,line_name,model_name,category,subcategory,material,authenticity_points,common_fake_patterns,condition_hint,mercari_price_low,mercari_price_high,reference_source,notes"
+        )
+        .limit(30);
 
       if (brandRows?.length) {
         referenceBlocks.push(
           "[ブランドバッグ系リファレンス]\n" +
             brandRows
-              .map((r: any) => `ブランド:${r.brand} / ライン:${r.line_name} / モデル:${r.model_name}`)
+              .map((r: any) => {
+                const low = r.mercari_price_low ?? "";
+                const high = r.mercari_price_high ?? "";
+                const range = low || high ? ` / 実売レンジ:${low}〜${high}` : "";
+                const src = r.reference_source ? ` / 参照:${r.reference_source}` : "";
+                return `ブランド:${r.brand} / ライン:${r.line_name} / モデル:${r.model_name} / カテゴリ:${r.category} / サブ:${r.subcategory} / 素材:${r.material}${range}${src} / 真贋:${r.authenticity_points} / 贋:${r.common_fake_patterns} / 状態ヒント:${r.condition_hint} / 備考:${r.notes}`;
+              })
               .join("\n")
         );
       }
+    } catch (e) {
+      console.error("brand_data_reference_v2 取得エラー", e);
+    }
 
+    try {
       const { data: jewelryRows } = await supabase.from("jewelry_reference").select("*").limit(20);
       if (jewelryRows?.length) {
-        referenceBlocks.push(
-          "[ジュエリー系リファレンス]\n" + jewelryRows.map((r: any) => JSON.stringify(r)).join("\n")
-        );
+        referenceBlocks.push("[ジュエリー系リファレンス]\n" + jewelryRows.map((r: any) => JSON.stringify(r)).join("\n"));
       }
+    } catch (e) {
+      console.error("jewelry_reference 取得エラー", e);
+    }
 
+    try {
       const { data: kinkoRows } = await supabase.from("kinko_urushi_reference").select("*").limit(20);
       if (kinkoRows?.length) {
-        referenceBlocks.push(
-          "[金工・漆器系リファレンス]\n" + kinkoRows.map((r: any) => JSON.stringify(r)).join("\n")
-        );
+        referenceBlocks.push("[金工・漆器系リファレンス]\n" + kinkoRows.map((r: any) => JSON.stringify(r)).join("\n"));
       }
+    } catch (e) {
+      console.error("kinko_urushi_reference 取得エラー", e);
+    }
 
+    try {
       const { data: wamonRows } = await supabase
         .from("wamon_reference")
         .select(
@@ -368,12 +319,16 @@ export async function POST(req: NextRequest) {
             wamonRows
               .map(
                 (r: any) =>
-                  `ジャンル:${r.genre} / カテゴリ:${r.category} / 作家:${r.author_name} / 筆跡:${r.stroke_traits} / 落款:${r.signature_traits} / 印文:${r.seal_text} / 真贋ポイント:${r.authenticity_points} / 贋作パターン:${r.common_fake_patterns} / 時代:${r.era} / 流派:${r.school_lineage}`
+                  `ジャンル:${r.genre} / カテゴリ:${r.category} / 作家:${r.author_name} / 筆跡:${r.stroke_traits} / 落款:${r.signature_traits} / 印文:${r.seal_text} / 真贋ポイント:${r.authenticity_points} / 贋作:${r.common_fake_patterns} / 時代:${r.era} / 流派:${r.school_lineage}`
               )
               .join("\n")
         );
       }
+    } catch (e) {
+      console.error("wamon_reference 取得エラー", e);
+    }
 
+    try {
       const { data: trainingRows } = await supabase
         .from("training_items")
         .select("genre,item_name,output_text,mercari_title,mercari_description,confidence")
@@ -384,25 +339,28 @@ export async function POST(req: NextRequest) {
       if (trainingRows?.length) {
         referenceBlocks.push(
           "[過去の教師データ]\n" +
-            trainingRows
-              .map((r: any) => `ジャンル:${r.genre} / 商品:${r.item_name} / 信頼度:${r.confidence}% / 概要:${r.output_text}`)
-              .join("\n")
+            trainingRows.map((r: any) => `ジャンル:${r.genre} / 商品:${r.item_name} / 信頼度:${r.confidence}% / 概要:${r.output_text}`).join("\n")
         );
       }
     } catch (e) {
-      console.error("リファレンス取得エラー", e);
+      console.error("training_items 取得エラー", e);
     }
 
     const referenceText = referenceBlocks.join("\n\n");
 
     const modeHint =
       listing_mode === "auction"
-        ? "出力はオークション向けを意識し、auction_title を特に最適化してください。"
-        : "出力はフリマ向けを意識し、mercari_title / mercari_description を特に最適化してください。";
+        ? "listing_mode=auction：オークション向け。auction_title を最適化し、mercari_* は空文字で返す。"
+        : "listing_mode=flea：フリマ向け。mercari_title/mercari_description を最適化し、auction_title は空文字で返す。";
+
+    const junkHint =
+      price_mode === "junk"
+        ? "price_mode=junk：ジャンク（現状渡し/動作未確認）前提。相場は「ジャンク実売レンジ」を最優先で【想定相場】に書く。根拠として参照元（reference_source）やレンジ（mercari_price_low/high）があれば必ず言及。"
+        : "price_mode=normal：通常中古前提。相場は控えめレンジで提示。";
 
     const content: any[] = [
-      { type: "input_text", text: SYSTEM_PROMPT },
-      { type: "input_text", text: `【出力モード】listing_mode=${listing_mode}\n${modeHint}` },
+      { type: "input_text", text: SYSTEM_PROMPT_BASE },
+      { type: "input_text", text: `【指定】listing_mode=${listing_mode} / price_mode=${price_mode}\n${modeHint}\n${junkHint}` },
       referenceText
         ? {
             type: "input_text",
@@ -412,11 +370,13 @@ export async function POST(req: NextRequest) {
       ...images.map((u) => ({ type: "input_image", image_url: u })),
     ].filter(Boolean);
 
-    // ===== OpenAI リクエスト（レート制限対策付き） =====
+    // ★ トークン節約：モードによって出力上限を下げる
+    const maxTokens = listing_mode === "auction" ? 900 : 1500;
+
     const aiRes: any = await callOpenAIWithRetry(openai, {
       model: "gpt-4.1",
       temperature: 0.2,
-      max_output_tokens: 1800,
+      max_output_tokens: maxTokens,
       input: [{ role: "user", content }],
     });
 
@@ -427,7 +387,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: "AI出力が空です。" }, { status: 500 });
     }
 
-    // ===== JSONパースの安定化処理 =====
     const cleaned = rawText.replace(/```json/gi, "").replace(/```/g, "").trim();
 
     let parsed: any;
@@ -447,21 +406,27 @@ export async function POST(req: NextRequest) {
     }
 
     const item_name: string | null = typeof parsed.item_name === "string" ? parsed.item_name.trim() : null;
-
-    // タイトルを最適化
-    const mercari_title = buildMercariTitle(parsed.mercari_title, item_name, output_text);
-
-    const mercari_description: string =
-      typeof parsed.mercari_description === "string" ? parsed.mercari_description : output_text;
-
     const confidence: number | null = typeof parsed.confidence === "number" ? parsed.confidence : null;
-
     const genre: string | null = typeof parsed.genre === "string" ? parsed.genre.trim() : null;
 
-    // auction_title（AIの値を優先しつつ、必ず65カウント以内に整形）
-    const auction_title = buildAuctionTitle(parsed.auction_title, item_name, mercari_title, output_text);
+    // ===== モード別：生成節約の強制（AIがルール破ってもここで矯正） =====
+    let mercari_title = "";
+    let mercari_description = "";
+    let auction_title = "";
 
-    // appraisals 保存
+    if (listing_mode === "flea") {
+      mercari_title = buildMercariTitle(parsed.mercari_title, item_name, output_text);
+      mercari_description = typeof parsed.mercari_description === "string" ? parsed.mercari_description : output_text;
+      auction_title = ""; // 強制
+    } else {
+      // auction
+      const tmpMercari = buildMercariTitle(parsed.mercari_title, item_name, output_text); // 補助で使うだけ
+      auction_title = buildAuctionTitle(parsed.auction_title, item_name, tmpMercari, output_text);
+      mercari_title = ""; // 強制
+      mercari_description = ""; // 強制
+    }
+
+    // appraisals 保存（junk_mode も保存しておくと後で便利）
     try {
       await supabase.from("appraisals").insert([
         {
@@ -476,7 +441,8 @@ export async function POST(req: NextRequest) {
           output_text,
           image_urls: images,
           model: "gpt-4.1",
-        },
+          junk_mode: price_mode === "junk",
+        } as any,
       ]);
     } catch (e) {
       console.error("appraisals 保存中の例外:", e);
@@ -500,7 +466,7 @@ export async function POST(req: NextRequest) {
           source: "kanteno-web",
           confidence,
           is_trainable: isTrainable,
-          raw_request: { image_urls: images, listing_mode },
+          raw_request: { image_urls: images, listing_mode, junk_mode: price_mode === "junk" },
           raw_response: aiRes,
         },
       ]);
@@ -508,7 +474,7 @@ export async function POST(req: NextRequest) {
       console.error("training_items 保存中の例外:", e);
     }
 
-    // ★ キュー方式の布石：assessment_jobs にも「完了済みジョブ」として保存
+    // assessment_jobs 保存
     try {
       await supabase.from("assessment_jobs").insert([
         {
@@ -524,6 +490,7 @@ export async function POST(req: NextRequest) {
             confidence,
             genre,
             item_name,
+            junk_mode: price_mode === "junk",
           },
           error_message: null,
         },
@@ -543,7 +510,8 @@ export async function POST(req: NextRequest) {
         confidence,
         genre,
         item_name,
-      },
+        junk_mode: price_mode === "junk",
+      } as any,
       { status: 200 }
     );
   } catch (e: any) {
@@ -551,15 +519,9 @@ export async function POST(req: NextRequest) {
 
     const status = e?.status ?? e?.response?.status;
     if (status === 429) {
-      return NextResponse.json(
-        { ok: false, error: "AI側のレート制限に達しています。少し時間をおいて再度お試しください。" },
-        { status: 429 }
-      );
+      return NextResponse.json({ ok: false, error: "AI側のレート制限に達しています。少し時間をおいて再度お試しください。" }, { status: 429 });
     }
 
-    return NextResponse.json(
-      { ok: false, error: e?.message ?? "査定中にエラーが発生しました。" },
-      { status: 500 }
-    );
+    return NextResponse.json({ ok: false, error: e?.message ?? "査定中にエラーが発生しました。" }, { status: 500 });
   }
 }
