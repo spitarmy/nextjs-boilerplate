@@ -16,21 +16,22 @@ type AssessResponse = {
   confidence?: number | null;
   genre?: string | null;
   item_name?: string | null;
+  junk_mode?: boolean;
   error?: string;
 };
 
-// ★ 5枚に変更
+// ★ 5枚
 const MAX_FILES = 5;
 
-// 元画像の容量制限（目安。送信上限とは別）
+// 元画像の容量制限（目安）
 const MAX_ORIGINAL_SIZE_PER_FILE = 10 * 1024 * 1024; // 10MB/枚
 const MAX_ORIGINAL_TOTAL_SIZE = 25 * 1024 * 1024; // 合計25MB（元画像の目安）
 
-// ★ 5枚対応で安定させるため少し軽量化
+// 軽量化
 const MAX_LONG_SIDE = 720;
 const JPEG_QUALITY = 0.65;
 
-// ★ dataURL合計が大きいと /api/assess 送信で落ちやすいので事前ガード
+// dataURL合計が大きいと送信で落ちやすいので事前ガード
 const MAX_TOTAL_DATAURL_BYTES = 6 * 1024 * 1024; // 6MB目安（安全側）
 
 function estimateDataUrlBytes(dataUrl: string): number {
@@ -74,10 +75,13 @@ export default function UploadForm() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
 
-  // 出力モード（フリマ / オークション）
+  // 出力モード
   const [listingMode, setListingMode] = useState<ListingMode>("flea");
 
-  // 画面幅に応じてレイアウト切り替え（スマホは1カラム）
+  // ★ ジャンクモード
+  const [junkMode, setJunkMode] = useState(false);
+
+  // 画面幅
   const [isMobile, setIsMobile] = useState(false);
 
   useEffect(() => {
@@ -102,7 +106,6 @@ export default function UploadForm() {
     setResult(null);
     setErrorMsg(null);
 
-    // 選びすぎたら案内（UX改善）
     if (selected.length > MAX_FILES) {
       setErrorMsg(`画像は最大 ${MAX_FILES} 枚までです。最初の ${MAX_FILES} 枚だけ使用します。`);
     }
@@ -148,7 +151,6 @@ export default function UploadForm() {
       for (const file of files) {
         const dataUrl = await fileToCompressedDataUrl(file);
 
-        // ★ 送信前にdataURL合計サイズをチェック（送信エラー回避）
         totalDataBytes += estimateDataUrlBytes(dataUrl);
         if (totalDataBytes > MAX_TOTAL_DATAURL_BYTES) {
           setErrorMsg(
@@ -168,6 +170,7 @@ export default function UploadForm() {
           image_urls: imageUrls,
           user_id: userId,
           listing_mode: listingMode,
+          junk_mode: junkMode, // ★追加
         }),
       });
 
@@ -195,7 +198,6 @@ export default function UploadForm() {
     }
   };
 
-  // ★ 表示は「今のタブ（listingMode）」を基準に切り替える
   const isFlea = listingMode === "flea";
   const isAuction = listingMode === "auction";
 
@@ -208,7 +210,7 @@ export default function UploadForm() {
         alignItems: "flex-start",
       }}
     >
-      {/* 左側：アップロード＆説明 */}
+      {/* 左側 */}
       <section
         style={{
           background: "radial-gradient(circle at top left, rgba(31,41,55,0.3), rgba(15,23,42,0.98))",
@@ -222,7 +224,7 @@ export default function UploadForm() {
         <h2 style={{ fontSize: isMobile ? 18 : 20, fontWeight: 700, margin: "0 0 4px" }}>査定する</h2>
         <p style={{ fontSize: 12, color: "#d1d5db", margin: "0 0 14px", lineHeight: 1.7 }}>
           最大 {MAX_FILES} 枚までアップロードできます。画像は長辺{MAX_LONG_SIDE}pxに自動圧縮され、
-          真贋・相場・出品用タイトル／説明文まで一括生成します。
+          真贋・相場・出品用タイトル／説明文まで生成します（選んだモードのみ生成してトークン節約）。
         </p>
 
         {/* 出力モード */}
@@ -272,6 +274,45 @@ export default function UploadForm() {
               }}
             >
               オークション向け
+            </button>
+          </div>
+
+          {/* ★ ジャンクモード */}
+          <div
+            style={{
+              marginTop: 10,
+              paddingTop: 10,
+              borderTop: "1px solid rgba(148,163,184,0.18)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 10,
+            }}
+          >
+            <div>
+              <div style={{ fontSize: 12, color: "#e5e7eb", fontWeight: 700 }}>ジャンクモード</div>
+              <div style={{ marginTop: 3, fontSize: 11, color: "#9ca3af", lineHeight: 1.5 }}>
+                動作未確認・現状渡し前提で「ジャンク実売レンジ」を優先して提示します。
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setJunkMode((v) => !v)}
+              style={{
+                minWidth: 92,
+                padding: "8px 12px",
+                borderRadius: 999,
+                border: junkMode ? "1px solid rgba(245,158,11,0.9)" : "1px solid rgba(148,163,184,0.35)",
+                background: junkMode ? "linear-gradient(to right, rgba(245,158,11,0.28), rgba(217,119,6,0.28))" : "rgba(2,6,23,0.35)",
+                color: "#e5e7eb",
+                fontSize: 12,
+                fontWeight: 800,
+                cursor: "pointer",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {junkMode ? "ON" : "OFF"}
             </button>
           </div>
 
@@ -350,7 +391,7 @@ export default function UploadForm() {
         )}
       </section>
 
-      {/* 右側：査定結果カード */}
+      {/* 右側 */}
       <section
         style={{
           marginTop: isMobile ? 16 : 0,
@@ -376,9 +417,9 @@ export default function UploadForm() {
             <br />
             ・真贋コメント（根拠付き）
             <br />
-            ・想定相場（控えめレンジ）
+            ・想定相場（控えめレンジ／ジャンク時は実売レンジ優先）
             <br />
-            ・出品用タイトル／説明文
+            ・出品用タイトル／説明文（選択したモードのみ）
             <br />
             が自動生成されます。
           </div>
@@ -396,8 +437,27 @@ export default function UploadForm() {
                 color: "#e5e7eb",
               }}
             >
-              <h3 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 600 }}>査定コメント</h3>
-              <p style={{ whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.7 }}>{result.output_text}</p>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700 }}>査定コメント</h3>
+                {(result.junk_mode || junkMode) && (
+                  <span
+                    style={{
+                      fontSize: 11,
+                      fontWeight: 900,
+                      padding: "4px 10px",
+                      borderRadius: 999,
+                      border: "1px solid rgba(245,158,11,0.55)",
+                      background: "rgba(245,158,11,0.12)",
+                      color: "#fde68a",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    ジャンク
+                  </span>
+                )}
+              </div>
+
+              <p style={{ whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.7, marginTop: 8 }}>{result.output_text}</p>
 
               <div style={{ marginTop: 8, fontSize: 11, color: "#cbd5f5" }}>
                 信頼度: {typeof result.confidence === "number" ? `${result.confidence}%` : "不明"}
@@ -410,7 +470,6 @@ export default function UploadForm() {
             {/* フリマ用（タブがフリマのときだけ表示） */}
             {isFlea && (
               <>
-                {/* フリマ用タイトル */}
                 <section
                   style={{
                     padding: isMobile ? 14 : 16,
@@ -421,7 +480,7 @@ export default function UploadForm() {
                   }}
                 >
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8 }}>
-                    <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>フリマ用タイトル</h3>
+                    <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700 }}>フリマ用タイトル</h3>
                     <button
                       type="button"
                       onClick={() => copyToClipboard(result.mercari_title)}
@@ -442,6 +501,7 @@ export default function UploadForm() {
                   <input
                     readOnly
                     value={result.mercari_title ?? ""}
+                    placeholder="（フリマ向けのときに生成されます）"
                     style={{
                       width: "100%",
                       padding: "8px 10px",
@@ -454,7 +514,6 @@ export default function UploadForm() {
                   />
                 </section>
 
-                {/* フリマ用説明文 */}
                 <section
                   style={{
                     padding: isMobile ? 14 : 16,
@@ -465,7 +524,7 @@ export default function UploadForm() {
                   }}
                 >
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8 }}>
-                    <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>フリマ用説明文</h3>
+                    <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700 }}>フリマ用説明文</h3>
                     <button
                       type="button"
                       onClick={() => copyToClipboard(result.mercari_description)}
@@ -486,6 +545,7 @@ export default function UploadForm() {
                   <textarea
                     readOnly
                     value={result.mercari_description ?? ""}
+                    placeholder="（フリマ向けのときに生成されます）"
                     rows={isMobile ? 6 : 8}
                     style={{
                       width: "100%",
@@ -514,7 +574,7 @@ export default function UploadForm() {
                 }}
               >
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8 }}>
-                  <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>オークション用タイトル</h3>
+                  <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700 }}>オークション用タイトル</h3>
                   <button
                     type="button"
                     onClick={() => copyToClipboard(result.auction_title)}
@@ -535,7 +595,7 @@ export default function UploadForm() {
                 <input
                   readOnly
                   value={result.auction_title ?? ""}
-                  placeholder="（生成されます）"
+                  placeholder="（オークション向けのときに生成されます）"
                   style={{
                     width: "100%",
                     padding: "8px 10px",
