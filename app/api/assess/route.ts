@@ -12,7 +12,7 @@ const openai = new OpenAI({
 type ListingMode = "flea" | "auction";
 type AssessMode = "normal" | "bundle";
 
-const MONTHLY_LIMIT_UNITS = 1000;
+const MONTHLY_LIMIT_UNITS = 1500;
 const OVERAGE_FEE_YEN_PER_UNIT = 50; // 1件50円（0.5件なら25円の計算も可能）
 
 function startOfMonthISO(d = new Date()): string {
