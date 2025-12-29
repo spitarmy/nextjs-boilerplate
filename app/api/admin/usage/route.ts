@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { supabase } from "../../../../lib/supabase";
 
 export const runtime = "nodejs";
@@ -18,9 +18,9 @@ function isAdmin(userId: string | null): boolean {
   return !!userId && admins.includes(userId);
 }
 
-export async function GET(req: NextRequest) {
+export async function GET() {
   try {
-    // 1) ログインユーザー取得（cookieセッション前提）
+    // cookieセッション前提：ログインユーザー取得
     const { data: authData, error: authErr } = await supabase.auth.getUser();
     if (authErr) {
       return NextResponse.json({ ok: false, error: authErr.message }, { status: 401 });
@@ -31,7 +31,6 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ ok: false, error: "forbidden" }, { status: 403 });
     }
 
-    // 2) 今月の usage_events を引く
     const from = startOfMonthISO();
 
     const { data, error } = await supabase
@@ -44,7 +43,6 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
     }
 
-    // 3) user_id ごとに集計
     const map = new Map<
       string,
       {
@@ -61,14 +59,14 @@ export async function GET(req: NextRequest) {
     >();
 
     for (const r of data ?? []) {
-      const uid = r.user_id as string | null;
+      const uid = (r as any).user_id as string | null;
       if (!uid) continue;
 
-      const units = Number(r.units ?? 0);
-      const over = Boolean(r.is_overage);
-      const assess_mode = (r.assess_mode ?? "normal") as string;
-      const listing_mode = (r.listing_mode ?? "") as string;
-      const created = typeof r.created_at === "string" ? r.created_at : null;
+      const units = Number((r as any).units ?? 0);
+      const over = Boolean((r as any).is_overage);
+      const assess_mode = ((r as any).assess_mode ?? "normal") as string;
+      const listing_mode = ((r as any).listing_mode ?? "") as string;
+      const created = typeof (r as any).created_at === "string" ? (r as any).created_at : null;
 
       if (!map.has(uid)) {
         map.set(uid, {
@@ -101,17 +99,7 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    const rows = Array.from(map.values())
-      .map((r) => ({
-        ...r,
-        used_units: Number(r.used_units.toFixed(1)),
-        overage_units: Number(r.overage_units.toFixed(1)),
-        normal_units: Number(r.normal_units.toFixed(1)),
-        bundle_units: Number(r.bundle_units.toFixed(1)),
-        flea_units: Number(r.flea_units.toFixed(1)),
-        auction_units: Number(r.auction_units.toFixed(1)),
-      }))
-      .sort((a, b) => b.used_units - a.used_units);
+    const rows = Array.from(map.values()).sort((a, b) => b.used_units - a.used_units);
 
     return NextResponse.json({ ok: true, rows }, { status: 200 });
   } catch (e: any) {
