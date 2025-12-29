@@ -1,39 +1,63 @@
-// app/components/UploadForm.tsx
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabase";
 
 type ListingMode = "flea" | "auction";
-type AssessMode = "single" | "bulk";
+type AssessMode = "normal" | "bundle"; // まとめ査定=0.5件消費
+
+type BundlePickup = {
+  item_name: string;
+  notes?: string;
+  price_hint?: string; // 例: "2,000〜4,000円前後"
+};
 
 type AssessResponse = {
   ok: boolean;
+
+  // 共通
   output_text?: string;
-  mercari_title?: string;
-  mercari_description?: string;
-  auction_title?: string;
   listing_mode?: ListingMode;
   assess_mode?: AssessMode;
-  junk_mode?: boolean;
   confidence?: number | null;
   genre?: string | null;
   item_name?: string | null;
+
+  // 通常（フリマ/オークション）
+  mercari_title?: string | null;
+  mercari_description?: string | null;
+  auction_title?: string | null;
+
+  // まとめ査定（ピックアップ）
+  bundle_pickups?: BundlePickup[] | null;
+
+  // 利用数関連
+  usage?: {
+    used_units: number;
+    limit_units: number;
+    overage_units: number;
+  };
+
+  // 超過関連
+  over_limit?: boolean;
+  required_overage_fee_yen?: number; // 1件50円 etc
+
   error?: string;
 };
 
+// ★ 5枚
 const MAX_FILES = 5;
 
 // 元画像の容量制限（目安）
 const MAX_ORIGINAL_SIZE_PER_FILE = 10 * 1024 * 1024; // 10MB/枚
 const MAX_ORIGINAL_TOTAL_SIZE = 25 * 1024 * 1024; // 合計25MB（元画像の目安）
 
-// 5枚でも送信を安定させる設定
+// ★ 5枚対応で安定させるため軽量化
 const MAX_LONG_SIDE = 720;
 const JPEG_QUALITY = 0.65;
 
-// dataURL合計が大きいと /api/assess 送信で落ちやすいので事前ガード
-const MAX_TOTAL_DATAURL_BYTES = 7 * 1024 * 1024; // 安全側
+// ★ dataURL合計が大きいと /api/assess 送信で落ちやすいので事前ガード
+const MAX_TOTAL_DATAURL_BYTES = 6 * 1024 * 1024; // 6MB目安（安全側）
 
 function estimateDataUrlBytes(dataUrl: string): number {
   const comma = dataUrl.indexOf(",");
@@ -74,24 +98,43 @@ export default function UploadForm() {
   const [result, setResult] = useState<AssessResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
   const [userId, setUserId] = useState<string | null>(null);
 
-  // ★ 追加：査定モード（通常/まとめ）
-  const [assessMode, setAssessMode] = useState<AssessMode>("single");
-
-  // 出力モード（フリマ / オークション）※bulkではタイトル生成しないが、UIは残す
+  // 出力モード（フリマ / オークション）
   const [listingMode, setListingMode] = useState<ListingMode>("flea");
 
-  // ジャンクモード（独立）
-  const [junkMode, setJunkMode] = useState(false);
+  // 査定モード（通常 / まとめ）
+  const [assessMode, setAssessMode] = useState<AssessMode>("normal");
 
+  // 月次利用数
+  const [usage, setUsage] = useState<{ used_units: number; limit_units: number; overage_units: number } | null>(null);
+
+  // 超過で続行するフラグ（ボタンで true にして再送）
+  const [allowOverage, setAllowOverage] = useState(false);
+
+  // 画面幅に応じてレイアウト切り替え（スマホは1カラム）
   const [isMobile, setIsMobile] = useState(false);
+
+  const isFlea = listingMode === "flea";
+  const isAuction = listingMode === "auction";
+
+  const usagePercent = useMemo(() => {
+    if (!usage) return 0;
+    const p = (usage.used_units / usage.limit_units) * 100;
+    return Math.max(0, Math.min(100, p));
+  }, [usage]);
 
   useEffect(() => {
     (async () => {
       const { data } = await supabase.auth.getUser();
-      setUserId(data.user?.id ?? null);
+      const id = data.user?.id ?? null;
+      setUserId(id);
+      if (id) {
+        await refreshUsage(id);
+      }
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -102,20 +145,43 @@ export default function UploadForm() {
     return () => window.removeEventListener("resize", check);
   }, []);
 
+  const refreshUsage = async (uid: string) => {
+    try {
+      const res = await fetch(`/api/usage?user_id=${encodeURIComponent(uid)}`);
+      const json = await res.json();
+      if (res.ok && json?.ok) {
+        setUsage(json.usage);
+      }
+    } catch {
+      // 無視（表示だけなので）
+    }
+  };
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selected = Array.from(e.target.files ?? []);
     const limited = selected.slice(0, MAX_FILES);
+
     setFiles(limited);
     setResult(null);
     setErrorMsg(null);
+    setAllowOverage(false);
 
     if (selected.length > MAX_FILES) {
       setErrorMsg(`画像は最大 ${MAX_FILES} 枚までです。最初の ${MAX_FILES} 枚だけ使用します。`);
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const copyToClipboard = async (text: string | null | undefined) => {
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      alert("コピーしました");
+    } catch {
+      alert("コピーに失敗しました。手動で選択してコピーしてください。");
+    }
+  };
+
+  const submitInternal = async (overage: boolean) => {
     setErrorMsg(null);
     setResult(null);
 
@@ -123,7 +189,6 @@ export default function UploadForm() {
       setErrorMsg("画像を少なくとも1枚選択してください。");
       return;
     }
-
     if (files.length > MAX_FILES) {
       setErrorMsg(`画像は最大 ${MAX_FILES} 枚までです。`);
       return;
@@ -138,7 +203,6 @@ export default function UploadForm() {
         return;
       }
     }
-
     if (totalSize > MAX_ORIGINAL_TOTAL_SIZE) {
       setErrorMsg("画像の合計容量が大きすぎます（25MB超）。枚数を減らすか解像度を下げてください。");
       return;
@@ -153,15 +217,11 @@ export default function UploadForm() {
       for (const file of files) {
         const dataUrl = await fileToCompressedDataUrl(file);
         totalDataBytes += estimateDataUrlBytes(dataUrl);
-
         if (totalDataBytes > MAX_TOTAL_DATAURL_BYTES) {
-          setErrorMsg(
-            "画像データが大きすぎて送信時にエラーになる可能性があります。画像を減らすか、不要な背景をトリミングして再度お試しください。"
-          );
+          setErrorMsg("画像データが大きすぎて送信時にエラーになる可能性があります。画像を減らすか、不要背景をトリミングして再度お試しください。");
           setLoading(false);
           return;
         }
-
         imageUrls.push(dataUrl);
       }
 
@@ -171,17 +231,31 @@ export default function UploadForm() {
         body: JSON.stringify({
           image_urls: imageUrls,
           user_id: userId,
-          assess_mode: assessMode, // ★ 追加
           listing_mode: listingMode,
-          junk_mode: junkMode,
+          assess_mode: assessMode,
+          allow_overage: overage,
         }),
       });
 
       const json: AssessResponse = await res.json();
+
+      // 利用数UI更新
+      if (json?.usage) setUsage(json.usage);
+      else if (userId) await refreshUsage(userId);
+
+      if (res.status === 402 && json?.over_limit) {
+        // 超過：続行ボタンを出す
+        setResult(json);
+        setErrorMsg(json.error || "今月の上限に達しました。超過で続行する場合は下のボタンを押してください。");
+        setAllowOverage(true);
+        return;
+      }
+
       if (!res.ok || !json.ok) {
         setErrorMsg(json.error || "査定に失敗しました。時間をおいて再度お試しください。");
       } else {
         setResult(json);
+        setAllowOverage(false);
       }
     } catch (err) {
       console.error(err);
@@ -191,19 +265,10 @@ export default function UploadForm() {
     }
   };
 
-  const copyToClipboard = async (text: string | undefined) => {
-    if (!text) return;
-    try {
-      await navigator.clipboard.writeText(text);
-      alert("コピーしました");
-    } catch {
-      alert("コピーに失敗しました。手動で選択してコピーしてください。");
-    }
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await submitInternal(false);
   };
-
-  const isFlea = listingMode === "flea";
-  const isAuction = listingMode === "auction";
-  const isBulk = assessMode === "bulk";
 
   return (
     <div
@@ -225,12 +290,39 @@ export default function UploadForm() {
           color: "#e5e7eb",
         }}
       >
-        <h2 style={{ fontSize: isMobile ? 18 : 20, fontWeight: 700, margin: "0 0 4px" }}>査定する</h2>
+        <h2 style={{ fontSize: isMobile ? 18 : 20, fontWeight: 700, margin: "0 0 6px" }}>査定する</h2>
+
+        {/* 月次利用数 */}
+        <div
+          style={{
+            marginBottom: 12,
+            padding: 10,
+            borderRadius: 14,
+            border: "1px solid rgba(148,163,184,0.35)",
+            backgroundColor: "rgba(2,6,23,0.55)",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+            <div style={{ fontSize: 12, fontWeight: 700 }}>今月の利用数</div>
+            <div style={{ fontSize: 12, color: "#cbd5f5" }}>
+              {usage ? `${usage.used_units} / ${usage.limit_units}` : "読み込み中…"}
+            </div>
+          </div>
+          <div style={{ marginTop: 8, height: 8, borderRadius: 999, background: "rgba(148,163,184,0.25)", overflow: "hidden" }}>
+            <div style={{ width: `${usagePercent}%`, height: "100%", background: "linear-gradient(to right, rgba(37,99,235,0.7), rgba(79,70,229,0.7))" }} />
+          </div>
+          {usage && usage.overage_units > 0 && (
+            <div style={{ marginTop: 6, fontSize: 11, color: "#fca5a5" }}>
+              超過分: {usage.overage_units} 件（※月末請求対象）
+            </div>
+          )}
+        </div>
+
         <p style={{ fontSize: 12, color: "#d1d5db", margin: "0 0 14px", lineHeight: 1.7 }}>
           最大 {MAX_FILES} 枚までアップロードできます。画像は長辺{MAX_LONG_SIDE}pxに自動圧縮されます。
         </p>
 
-        {/* ★ 査定モード */}
+        {/* 査定モード（通常 / まとめ） */}
         <div
           style={{
             marginBottom: 12,
@@ -241,143 +333,105 @@ export default function UploadForm() {
           }}
         >
           <div style={{ fontSize: 12, color: "#e5e7eb", marginBottom: 8, fontWeight: 600 }}>査定モード</div>
-
           <div style={{ display: "flex", gap: 8 }}>
             <button
               type="button"
-              onClick={() => setAssessMode("single")}
+              onClick={() => setAssessMode("normal")}
               style={{
                 flex: 1,
                 padding: "9px 10px",
                 borderRadius: 999,
-                border: assessMode === "single" ? "1px solid rgba(99,102,241,0.9)" : "1px solid rgba(148,163,184,0.35)",
-                background: assessMode === "single" ? "linear-gradient(to right, rgba(37,99,235,0.35), rgba(79,70,229,0.35))" : "rgba(2,6,23,0.35)",
-                color: "#e5e7eb",
-                fontSize: 12,
-                fontWeight: 700,
-                cursor: "pointer",
-              }}
-            >
-              通常査定
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setAssessMode("bulk")}
-              style={{
-                flex: 1,
-                padding: "9px 10px",
-                borderRadius: 999,
-                border: assessMode === "bulk" ? "1px solid rgba(99,102,241,0.9)" : "1px solid rgba(148,163,184,0.35)",
-                background: assessMode === "bulk" ? "linear-gradient(to right, rgba(37,99,235,0.35), rgba(79,70,229,0.35))" : "rgba(2,6,23,0.35)",
-                color: "#e5e7eb",
-                fontSize: 12,
-                fontWeight: 700,
-                cursor: "pointer",
-              }}
-            >
-              まとめ査定
-            </button>
-          </div>
-
-          <div style={{ marginTop: 8, fontSize: 11, color: "#9ca3af", lineHeight: 1.6 }}>
-            {assessMode === "bulk"
-              ? "※まとめ査定は「ピックアップ査定」に特化します（タイトル/説明文は生成しません）。"
-              : "※通常査定はフリマ/オークション向けの文章まで生成します。"}
-          </div>
-        </div>
-
-        {/* 出力モード（bulkの時は意味が薄いので操作しづらくする） */}
-        <div
-          style={{
-            marginBottom: 12,
-            padding: 10,
-            borderRadius: 14,
-            border: "1px solid rgba(148,163,184,0.35)",
-            backgroundColor: "rgba(2,6,23,0.55)",
-            opacity: isBulk ? 0.55 : 1,
-            pointerEvents: isBulk ? "none" : "auto",
-          }}
-        >
-          <div style={{ fontSize: 12, color: "#e5e7eb", marginBottom: 8, fontWeight: 600 }}>出力モード</div>
-
-          <div style={{ display: "flex", gap: 8 }}>
-            <button
-              type="button"
-              onClick={() => setListingMode("flea")}
-              style={{
-                flex: 1,
-                padding: "9px 10px",
-                borderRadius: 999,
-                border: listingMode === "flea" ? "1px solid rgba(99,102,241,0.9)" : "1px solid rgba(148,163,184,0.35)",
-                background: listingMode === "flea" ? "linear-gradient(to right, rgba(37,99,235,0.35), rgba(79,70,229,0.35))" : "rgba(2,6,23,0.35)",
+                border: assessMode === "normal" ? "1px solid rgba(99,102,241,0.9)" : "1px solid rgba(148,163,184,0.35)",
+                background: assessMode === "normal" ? "linear-gradient(to right, rgba(37,99,235,0.35), rgba(79,70,229,0.35))" : "rgba(2,6,23,0.35)",
                 color: "#e5e7eb",
                 fontSize: 12,
                 fontWeight: 600,
                 cursor: "pointer",
               }}
             >
-              フリマ向け
+              通常査定（1件）
             </button>
 
             <button
               type="button"
-              onClick={() => setListingMode("auction")}
+              onClick={() => setAssessMode("bundle")}
               style={{
                 flex: 1,
                 padding: "9px 10px",
                 borderRadius: 999,
-                border: listingMode === "auction" ? "1px solid rgba(99,102,241,0.9)" : "1px solid rgba(148,163,184,0.35)",
-                background: listingMode === "auction" ? "linear-gradient(to right, rgba(37,99,235,0.35), rgba(79,70,229,0.35))" : "rgba(2,6,23,0.35)",
+                border: assessMode === "bundle" ? "1px solid rgba(99,102,241,0.9)" : "1px solid rgba(148,163,184,0.35)",
+                background: assessMode === "bundle" ? "linear-gradient(to right, rgba(37,99,235,0.35), rgba(79,70,229,0.35))" : "rgba(2,6,23,0.35)",
                 color: "#e5e7eb",
                 fontSize: 12,
                 fontWeight: 600,
                 cursor: "pointer",
               }}
             >
-              オークション向け
+              まとめ査定（0.5件）
             </button>
           </div>
 
           <div style={{ marginTop: 8, fontSize: 11, color: "#9ca3af", lineHeight: 1.6 }}>
-            {isBulk ? "※まとめ査定ではここは無効（タイトル生成しないため）" : "※出力内にサイト名は明記しません。"}
+            ※まとめ査定は「写真内の値が付きそうな数点」をピックアップして返します（タイトル生成なし）。
           </div>
         </div>
 
-        {/* ジャンク */}
-        <div
-          style={{
-            marginBottom: 12,
-            padding: 10,
-            borderRadius: 14,
-            border: "1px solid rgba(148,163,184,0.35)",
-            backgroundColor: "rgba(2,6,23,0.55)",
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-            <div style={{ fontSize: 12, color: "#e5e7eb", fontWeight: 600 }}>ジャンクモード</div>
-            <button
-              type="button"
-              onClick={() => setJunkMode((v) => !v)}
-              style={{
-                padding: "8px 12px",
-                borderRadius: 999,
-                border: junkMode ? "1px solid rgba(248,113,113,0.9)" : "1px solid rgba(148,163,184,0.35)",
-                background: junkMode ? "linear-gradient(to right, rgba(248,113,113,0.25), rgba(239,68,68,0.25))" : "rgba(2,6,23,0.35)",
-                color: "#e5e7eb",
-                fontSize: 12,
-                fontWeight: 700,
-                cursor: "pointer",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {junkMode ? "ON（ジャンク）" : "OFF（通常）"}
-            </button>
+        {/* 出力モード（通常査定のときだけ） */}
+        {assessMode === "normal" && (
+          <div
+            style={{
+              marginBottom: 12,
+              padding: 10,
+              borderRadius: 14,
+              border: "1px solid rgba(148,163,184,0.35)",
+              backgroundColor: "rgba(2,6,23,0.55)",
+            }}
+          >
+            <div style={{ fontSize: 12, color: "#e5e7eb", marginBottom: 8, fontWeight: 600 }}>出力モード</div>
+
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                type="button"
+                onClick={() => setListingMode("flea")}
+                style={{
+                  flex: 1,
+                  padding: "9px 10px",
+                  borderRadius: 999,
+                  border: listingMode === "flea" ? "1px solid rgba(99,102,241,0.9)" : "1px solid rgba(148,163,184,0.35)",
+                  background: listingMode === "flea" ? "linear-gradient(to right, rgba(37,99,235,0.35), rgba(79,70,229,0.35))" : "rgba(2,6,23,0.35)",
+                  color: "#e5e7eb",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                フリマ向け
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setListingMode("auction")}
+                style={{
+                  flex: 1,
+                  padding: "9px 10px",
+                  borderRadius: 999,
+                  border: listingMode === "auction" ? "1px solid rgba(99,102,241,0.9)" : "1px solid rgba(148,163,184,0.35)",
+                  background: listingMode === "auction" ? "linear-gradient(to right, rgba(37,99,235,0.35), rgba(79,70,229,0.35))" : "rgba(2,6,23,0.35)",
+                  color: "#e5e7eb",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                オークション向け
+              </button>
+            </div>
+
+            <div style={{ marginTop: 8, fontSize: 11, color: "#9ca3af", lineHeight: 1.6 }}>
+              ※モードに応じて必要なものだけ生成します（トークン節約）。
+            </div>
           </div>
-          <div style={{ marginTop: 8, fontSize: 11, color: "#9ca3af", lineHeight: 1.6 }}>
-            ※ジャンクONは「破損/欠品/動作未確認」前提で下振れ評価します（まとめ査定でも有効）。
-          </div>
-        </div>
+        )}
 
         <form onSubmit={handleSubmit}>
           <label style={{ display: "block", fontSize: 13, marginBottom: 8, color: "#f9fafb" }}>
@@ -397,7 +451,7 @@ export default function UploadForm() {
             <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 8, lineHeight: 1.6 }}>
               ・1枚あたり最大10MB・合計25MBまで（元画像の目安）
               <br />
-              ・送信エラー回避のため、背景をなるべくトリミングしてください。
+              ・送信エラー回避のため、背景はなるべくトリミングしてください。
             </div>
           </div>
 
@@ -430,6 +484,29 @@ export default function UploadForm() {
           >
             {loading ? "AIが査定しています…" : "AI査定を開始する"}
           </button>
+
+          {/* 超過で続行 */}
+          {allowOverage && (
+            <button
+              type="button"
+              onClick={() => submitInternal(true)}
+              disabled={loading}
+              style={{
+                marginTop: 10,
+                width: "100%",
+                padding: "10px 16px",
+                borderRadius: 999,
+                border: "1px solid rgba(248,113,113,0.75)",
+                background: "rgba(127,29,29,0.25)",
+                color: "#fecaca",
+                fontSize: 14,
+                fontWeight: 700,
+                cursor: loading ? "default" : "pointer",
+              }}
+            >
+              超過で続行（1件50円・月末請求）
+            </button>
+          )}
         </form>
 
         {errorMsg && (
@@ -442,6 +519,7 @@ export default function UploadForm() {
               border: "1px solid rgba(248,113,113,0.6)",
               color: "#fecaca",
               fontSize: 12,
+              lineHeight: 1.6,
             }}
           >
             {errorMsg}
@@ -449,8 +527,15 @@ export default function UploadForm() {
         )}
       </section>
 
-      {/* 右側 */}
-      <section style={{ marginTop: isMobile ? 16 : 0, display: "flex", flexDirection: "column", gap: 14 }}>
+      {/* 右側：結果 */}
+      <section
+        style={{
+          marginTop: isMobile ? 16 : 0,
+          display: "flex",
+          flexDirection: "column",
+          gap: 14,
+        }}
+      >
         {!result && (
           <div
             style={{
@@ -463,29 +548,22 @@ export default function UploadForm() {
               lineHeight: 1.7,
             }}
           >
-            右側には査定結果が表示されます。
+            右側には査定結果が表示されます。画像をアップロードして「AI査定を開始する」を押すと、
             <br />
             <br />
-            {assessMode === "bulk" ? (
-              <>
-                ・まとめ撮りから価値が出そうな上位をピックアップ
-                <br />
-                ・出張買取向けの簡潔な判断
-              </>
-            ) : (
-              <>
-                ・真贋コメント（根拠付き）
-                <br />
-                ・想定相場（控えめレンジ）
-                <br />
-                ・出品用タイトル／説明文
-              </>
-            )}
+            ・真贋コメント（根拠付き）
+            <br />
+            ・想定相場（控えめレンジ）
+            <br />
+            ・（通常査定のみ）出品用タイトル／説明文
+            <br />
+            が自動生成されます。
           </div>
         )}
 
         {result && result.ok && (
           <div style={{ display: "grid", gap: 14 }}>
+            {/* 査定コメント */}
             <section
               style={{
                 padding: isMobile ? 14 : 16,
@@ -497,22 +575,44 @@ export default function UploadForm() {
             >
               <h3 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 600 }}>査定コメント</h3>
               <p style={{ whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.7 }}>{result.output_text}</p>
-
               <div style={{ marginTop: 8, fontSize: 11, color: "#cbd5f5" }}>
                 信頼度: {typeof result.confidence === "number" ? `${result.confidence}%` : "不明"}
                 {"　"}ジャンル: {result.genre ?? "不明"}
                 {"　"}型名: {result.item_name ?? "不明"}
-                {"　"}査定: {result.assess_mode === "bulk" ? "まとめ" : "通常"}
-                {"　"}モード: {result.listing_mode === "auction" ? "オークション" : "フリマ"}
-                {"　"}ジャンク: {result.junk_mode ? "ON" : "OFF"}
+                {"　"}モード: {result.assess_mode === "bundle" ? "まとめ査定" : isAuction ? "オークション" : "フリマ"}
               </div>
             </section>
 
-            {/* ★ bulk のときはタイトル類を表示しない */}
-            {result.assess_mode !== "bulk" && (
+            {/* まとめ査定：ピックアップ */}
+            {result.assess_mode === "bundle" && Array.isArray(result.bundle_pickups) && (
+              <section
+                style={{
+                  padding: isMobile ? 14 : 16,
+                  borderRadius: 16,
+                  background: "#0b1120",
+                  border: "1px solid rgba(55,65,81,0.9)",
+                  color: "#e5e7eb",
+                }}
+              >
+                <h3 style={{ margin: "0 0 10px", fontSize: 14, fontWeight: 700 }}>ピックアップ査定（数点）</h3>
+                <div style={{ display: "grid", gap: 10 }}>
+                  {result.bundle_pickups.map((p, idx) => (
+                    <div key={idx} style={{ padding: 10, borderRadius: 12, border: "1px solid rgba(148,163,184,0.25)", background: "rgba(2,6,23,0.35)" }}>
+                      <div style={{ fontSize: 13, fontWeight: 700 }}>{p.item_name}</div>
+                      {p.price_hint && <div style={{ marginTop: 4, fontSize: 12, color: "#cbd5f5" }}>目安: {p.price_hint}</div>}
+                      {p.notes && <div style={{ marginTop: 4, fontSize: 12, color: "#9ca3af", lineHeight: 1.6 }}>{p.notes}</div>}
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {/* 通常査定：タブで表示切替 */}
+            {result.assess_mode !== "bundle" && (
               <>
                 {isFlea && (
                   <>
+                    {/* フリマ用タイトル */}
                     <section
                       style={{
                         padding: isMobile ? 14 : 16,
@@ -556,6 +656,7 @@ export default function UploadForm() {
                       />
                     </section>
 
+                    {/* フリマ用説明文 */}
                     <section
                       style={{
                         padding: isMobile ? 14 : 16,
@@ -635,6 +736,7 @@ export default function UploadForm() {
                     <input
                       readOnly
                       value={result.auction_title ?? ""}
+                      placeholder="（生成されます）"
                       style={{
                         width: "100%",
                         padding: "8px 10px",
@@ -645,6 +747,9 @@ export default function UploadForm() {
                         color: "#e5e7eb",
                       }}
                     />
+                    <div style={{ marginTop: 8, fontSize: 11, color: "#9ca3af", lineHeight: 1.6 }}>
+                      ※半角は0.5文字相当としてカウントし、上限内に収まるよう自動調整しています。
+                    </div>
                   </section>
                 )}
               </>
