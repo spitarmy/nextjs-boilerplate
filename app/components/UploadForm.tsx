@@ -5,6 +5,7 @@ import React, { useState, useEffect } from "react";
 import { supabase } from "../../lib/supabase";
 
 type ListingMode = "flea" | "auction";
+type AssessMode = "single" | "bulk";
 
 type AssessResponse = {
   ok: boolean;
@@ -13,27 +14,26 @@ type AssessResponse = {
   mercari_description?: string;
   auction_title?: string;
   listing_mode?: ListingMode;
-  junk_mode?: boolean; // ★ 追加（表示用）
+  assess_mode?: AssessMode;
+  junk_mode?: boolean;
   confidence?: number | null;
   genre?: string | null;
   item_name?: string | null;
   error?: string;
 };
 
-// ★ 5枚に変更
 const MAX_FILES = 5;
 
 // 元画像の容量制限（目安）
 const MAX_ORIGINAL_SIZE_PER_FILE = 10 * 1024 * 1024; // 10MB/枚
 const MAX_ORIGINAL_TOTAL_SIZE = 25 * 1024 * 1024; // 合計25MB（元画像の目安）
 
-// ★ 5枚対応で安定させる（少し軽量化）
+// 5枚でも送信を安定させる設定
 const MAX_LONG_SIDE = 720;
 const JPEG_QUALITY = 0.65;
 
-// ★ dataURL合計が大きいと /api/assess 送信で落ちやすいので事前ガード
-// ※ここを上げすぎると逆に送信で落ちるので、安全側から開始
-const MAX_TOTAL_DATAURL_BYTES = 7 * 1024 * 1024; // 7MB目安（25MBを超える方向にしたい要望でも、送信安定が最優先）
+// dataURL合計が大きいと /api/assess 送信で落ちやすいので事前ガード
+const MAX_TOTAL_DATAURL_BYTES = 7 * 1024 * 1024; // 安全側
 
 function estimateDataUrlBytes(dataUrl: string): number {
   const comma = dataUrl.indexOf(",");
@@ -76,13 +76,15 @@ export default function UploadForm() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
 
-  // 出力モード（フリマ / オークション）
+  // ★ 追加：査定モード（通常/まとめ）
+  const [assessMode, setAssessMode] = useState<AssessMode>("single");
+
+  // 出力モード（フリマ / オークション）※bulkではタイトル生成しないが、UIは残す
   const [listingMode, setListingMode] = useState<ListingMode>("flea");
 
-  // ★ ジャンクモード
+  // ジャンクモード（独立）
   const [junkMode, setJunkMode] = useState(false);
 
-  // 画面幅に応じてレイアウト切り替え（スマホは1カラム）
   const [isMobile, setIsMobile] = useState(false);
 
   useEffect(() => {
@@ -131,7 +133,6 @@ export default function UploadForm() {
     let totalSize = 0;
     for (const f of files) {
       totalSize += f.size;
-
       if (f.size > MAX_ORIGINAL_SIZE_PER_FILE) {
         setErrorMsg("元の画像ファイルの容量が大きすぎます（10MB超）。解像度を下げてからお試しください。");
         return;
@@ -151,8 +152,8 @@ export default function UploadForm() {
 
       for (const file of files) {
         const dataUrl = await fileToCompressedDataUrl(file);
-
         totalDataBytes += estimateDataUrlBytes(dataUrl);
+
         if (totalDataBytes > MAX_TOTAL_DATAURL_BYTES) {
           setErrorMsg(
             "画像データが大きすぎて送信時にエラーになる可能性があります。画像を減らすか、不要な背景をトリミングして再度お試しください。"
@@ -170,8 +171,9 @@ export default function UploadForm() {
         body: JSON.stringify({
           image_urls: imageUrls,
           user_id: userId,
+          assess_mode: assessMode, // ★ 追加
           listing_mode: listingMode,
-          junk_mode: junkMode, // ★ 追加
+          junk_mode: junkMode,
         }),
       });
 
@@ -201,6 +203,7 @@ export default function UploadForm() {
 
   const isFlea = listingMode === "flea";
   const isAuction = listingMode === "auction";
+  const isBulk = assessMode === "bulk";
 
   return (
     <div
@@ -211,6 +214,7 @@ export default function UploadForm() {
         alignItems: "flex-start",
       }}
     >
+      {/* 左側 */}
       <section
         style={{
           background: "radial-gradient(circle at top left, rgba(31,41,55,0.3), rgba(15,23,42,0.98))",
@@ -223,11 +227,10 @@ export default function UploadForm() {
       >
         <h2 style={{ fontSize: isMobile ? 18 : 20, fontWeight: 700, margin: "0 0 4px" }}>査定する</h2>
         <p style={{ fontSize: 12, color: "#d1d5db", margin: "0 0 14px", lineHeight: 1.7 }}>
-          最大 {MAX_FILES} 枚までアップロードできます。画像は長辺{MAX_LONG_SIDE}pxに自動圧縮され、
-          真贋・相場・出品用タイトル／説明文まで一括生成します。
+          最大 {MAX_FILES} 枚までアップロードできます。画像は長辺{MAX_LONG_SIDE}pxに自動圧縮されます。
         </p>
 
-        {/* 出力モード */}
+        {/* ★ 査定モード */}
         <div
           style={{
             marginBottom: 12,
@@ -235,6 +238,65 @@ export default function UploadForm() {
             borderRadius: 14,
             border: "1px solid rgba(148,163,184,0.35)",
             backgroundColor: "rgba(2,6,23,0.55)",
+          }}
+        >
+          <div style={{ fontSize: 12, color: "#e5e7eb", marginBottom: 8, fontWeight: 600 }}>査定モード</div>
+
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              type="button"
+              onClick={() => setAssessMode("single")}
+              style={{
+                flex: 1,
+                padding: "9px 10px",
+                borderRadius: 999,
+                border: assessMode === "single" ? "1px solid rgba(99,102,241,0.9)" : "1px solid rgba(148,163,184,0.35)",
+                background: assessMode === "single" ? "linear-gradient(to right, rgba(37,99,235,0.35), rgba(79,70,229,0.35))" : "rgba(2,6,23,0.35)",
+                color: "#e5e7eb",
+                fontSize: 12,
+                fontWeight: 700,
+                cursor: "pointer",
+              }}
+            >
+              通常査定
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setAssessMode("bulk")}
+              style={{
+                flex: 1,
+                padding: "9px 10px",
+                borderRadius: 999,
+                border: assessMode === "bulk" ? "1px solid rgba(99,102,241,0.9)" : "1px solid rgba(148,163,184,0.35)",
+                background: assessMode === "bulk" ? "linear-gradient(to right, rgba(37,99,235,0.35), rgba(79,70,229,0.35))" : "rgba(2,6,23,0.35)",
+                color: "#e5e7eb",
+                fontSize: 12,
+                fontWeight: 700,
+                cursor: "pointer",
+              }}
+            >
+              まとめ査定
+            </button>
+          </div>
+
+          <div style={{ marginTop: 8, fontSize: 11, color: "#9ca3af", lineHeight: 1.6 }}>
+            {assessMode === "bulk"
+              ? "※まとめ査定は「ピックアップ査定」に特化します（タイトル/説明文は生成しません）。"
+              : "※通常査定はフリマ/オークション向けの文章まで生成します。"}
+          </div>
+        </div>
+
+        {/* 出力モード（bulkの時は意味が薄いので操作しづらくする） */}
+        <div
+          style={{
+            marginBottom: 12,
+            padding: 10,
+            borderRadius: 14,
+            border: "1px solid rgba(148,163,184,0.35)",
+            backgroundColor: "rgba(2,6,23,0.55)",
+            opacity: isBulk ? 0.55 : 1,
+            pointerEvents: isBulk ? "none" : "auto",
           }}
         >
           <div style={{ fontSize: 12, color: "#e5e7eb", marginBottom: 8, fontWeight: 600 }}>出力モード</div>
@@ -278,11 +340,11 @@ export default function UploadForm() {
           </div>
 
           <div style={{ marginTop: 8, fontSize: 11, color: "#9ca3af", lineHeight: 1.6 }}>
-            ※出力内にサイト名は明記しません。オークション向けはタイトルが検索重視になります。
+            {isBulk ? "※まとめ査定ではここは無効（タイトル生成しないため）" : "※出力内にサイト名は明記しません。"}
           </div>
         </div>
 
-        {/* ★ ジャンクモード */}
+        {/* ジャンク */}
         <div
           style={{
             marginBottom: 12,
@@ -312,9 +374,8 @@ export default function UploadForm() {
               {junkMode ? "ON（ジャンク）" : "OFF（通常）"}
             </button>
           </div>
-
           <div style={{ marginTop: 8, fontSize: 11, color: "#9ca3af", lineHeight: 1.6 }}>
-            ※ジャンクONのときは、動作未確認・欠品・破損前提で「下振れ寄り」の相場を出します。
+            ※ジャンクONは「破損/欠品/動作未確認」前提で下振れ評価します（まとめ査定でも有効）。
           </div>
         </div>
 
@@ -388,15 +449,8 @@ export default function UploadForm() {
         )}
       </section>
 
-      {/* 右側：査定結果 */}
-      <section
-        style={{
-          marginTop: isMobile ? 16 : 0,
-          display: "flex",
-          flexDirection: "column",
-          gap: 14,
-        }}
-      >
+      {/* 右側 */}
+      <section style={{ marginTop: isMobile ? 16 : 0, display: "flex", flexDirection: "column", gap: 14 }}>
         {!result && (
           <div
             style={{
@@ -409,16 +463,24 @@ export default function UploadForm() {
               lineHeight: 1.7,
             }}
           >
-            右側には査定結果が表示されます。画像をアップロードして「AI査定を開始する」を押すと、
+            右側には査定結果が表示されます。
             <br />
             <br />
-            ・真贋コメント（根拠付き）
-            <br />
-            ・想定相場（控えめレンジ）
-            <br />
-            ・出品用タイトル／説明文
-            <br />
-            が自動生成されます。
+            {assessMode === "bulk" ? (
+              <>
+                ・まとめ撮りから価値が出そうな上位をピックアップ
+                <br />
+                ・出張買取向けの簡潔な判断
+              </>
+            ) : (
+              <>
+                ・真贋コメント（根拠付き）
+                <br />
+                ・想定相場（控えめレンジ）
+                <br />
+                ・出品用タイトル／説明文
+              </>
+            )}
           </div>
         )}
 
@@ -440,150 +502,152 @@ export default function UploadForm() {
                 信頼度: {typeof result.confidence === "number" ? `${result.confidence}%` : "不明"}
                 {"　"}ジャンル: {result.genre ?? "不明"}
                 {"　"}型名: {result.item_name ?? "不明"}
-                {"　"}モード: {isAuction ? "オークション" : "フリマ"}
+                {"　"}査定: {result.assess_mode === "bulk" ? "まとめ" : "通常"}
+                {"　"}モード: {result.listing_mode === "auction" ? "オークション" : "フリマ"}
                 {"　"}ジャンク: {result.junk_mode ? "ON" : "OFF"}
               </div>
             </section>
 
-            {isFlea && (
+            {/* ★ bulk のときはタイトル類を表示しない */}
+            {result.assess_mode !== "bulk" && (
               <>
-                <section
-                  style={{
-                    padding: isMobile ? 14 : 16,
-                    borderRadius: 16,
-                    background: "#0b1120",
-                    border: "1px solid rgba(55,65,81,0.9)",
-                    color: "#e5e7eb",
-                  }}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8 }}>
-                    <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>フリマ用タイトル</h3>
-                    <button
-                      type="button"
-                      onClick={() => copyToClipboard(result.mercari_title)}
+                {isFlea && (
+                  <>
+                    <section
                       style={{
-                        fontSize: 11,
-                        padding: "4px 10px",
-                        borderRadius: 999,
-                        border: "1px solid rgba(148,163,184,0.7)",
-                        background: "linear-gradient(to right, #020617, #020617)",
+                        padding: isMobile ? 14 : 16,
+                        borderRadius: 16,
+                        background: "#0b1120",
+                        border: "1px solid rgba(55,65,81,0.9)",
                         color: "#e5e7eb",
-                        cursor: "pointer",
-                        whiteSpace: "nowrap",
                       }}
                     >
-                      コピー
-                    </button>
-                  </div>
-                  <input
-                    readOnly
-                    value={result.mercari_title ?? ""}
-                    style={{
-                      width: "100%",
-                      padding: "8px 10px",
-                      borderRadius: 10,
-                      border: "1px solid rgba(55,65,81,0.9)",
-                      fontSize: 13,
-                      backgroundColor: "#020617",
-                      color: "#e5e7eb",
-                    }}
-                  />
-                </section>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8 }}>
+                        <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>フリマ用タイトル</h3>
+                        <button
+                          type="button"
+                          onClick={() => copyToClipboard(result.mercari_title)}
+                          style={{
+                            fontSize: 11,
+                            padding: "4px 10px",
+                            borderRadius: 999,
+                            border: "1px solid rgba(148,163,184,0.7)",
+                            background: "linear-gradient(to right, #020617, #020617)",
+                            color: "#e5e7eb",
+                            cursor: "pointer",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          コピー
+                        </button>
+                      </div>
+                      <input
+                        readOnly
+                        value={result.mercari_title ?? ""}
+                        style={{
+                          width: "100%",
+                          padding: "8px 10px",
+                          borderRadius: 10,
+                          border: "1px solid rgba(55,65,81,0.9)",
+                          fontSize: 13,
+                          backgroundColor: "#020617",
+                          color: "#e5e7eb",
+                        }}
+                      />
+                    </section>
 
-                <section
-                  style={{
-                    padding: isMobile ? 14 : 16,
-                    borderRadius: 16,
-                    background: "#0b1120",
-                    border: "1px solid rgba(55,65,81,0.9)",
-                    color: "#e5e7eb",
-                  }}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8 }}>
-                    <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>フリマ用説明文</h3>
-                    <button
-                      type="button"
-                      onClick={() => copyToClipboard(result.mercari_description)}
+                    <section
                       style={{
-                        fontSize: 11,
-                        padding: "4px 10px",
-                        borderRadius: 999,
-                        border: "1px solid rgba(148,163,184,0.7)",
-                        background: "linear-gradient(to right, #020617, #020617)",
+                        padding: isMobile ? 14 : 16,
+                        borderRadius: 16,
+                        background: "#0b1120",
+                        border: "1px solid rgba(55,65,81,0.9)",
                         color: "#e5e7eb",
-                        cursor: "pointer",
-                        whiteSpace: "nowrap",
                       }}
                     >
-                      コピー
-                    </button>
-                  </div>
-                  <textarea
-                    readOnly
-                    value={result.mercari_description ?? ""}
-                    rows={isMobile ? 6 : 8}
-                    style={{
-                      width: "100%",
-                      padding: "8px 10px",
-                      borderRadius: 10,
-                      border: "1px solid rgba(55,65,81,0.9)",
-                      fontSize: 13,
-                      backgroundColor: "#020617",
-                      color: "#e5e7eb",
-                      resize: "vertical",
-                    }}
-                  />
-                </section>
-              </>
-            )}
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8 }}>
+                        <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>フリマ用説明文</h3>
+                        <button
+                          type="button"
+                          onClick={() => copyToClipboard(result.mercari_description)}
+                          style={{
+                            fontSize: 11,
+                            padding: "4px 10px",
+                            borderRadius: 999,
+                            border: "1px solid rgba(148,163,184,0.7)",
+                            background: "linear-gradient(to right, #020617, #020617)",
+                            color: "#e5e7eb",
+                            cursor: "pointer",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          コピー
+                        </button>
+                      </div>
+                      <textarea
+                        readOnly
+                        value={result.mercari_description ?? ""}
+                        rows={isMobile ? 6 : 8}
+                        style={{
+                          width: "100%",
+                          padding: "8px 10px",
+                          borderRadius: 10,
+                          border: "1px solid rgba(55,65,81,0.9)",
+                          fontSize: 13,
+                          backgroundColor: "#020617",
+                          color: "#e5e7eb",
+                          resize: "vertical",
+                        }}
+                      />
+                    </section>
+                  </>
+                )}
 
-            {isAuction && (
-              <section
-                style={{
-                  padding: isMobile ? 14 : 16,
-                  borderRadius: 16,
-                  background: "#0b1120",
-                  border: "1px solid rgba(55,65,81,0.9)",
-                  color: "#e5e7eb",
-                }}
-              >
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8 }}>
-                  <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>オークション用タイトル</h3>
-                  <button
-                    type="button"
-                    onClick={() => copyToClipboard(result.auction_title)}
+                {isAuction && (
+                  <section
                     style={{
-                      fontSize: 11,
-                      padding: "4px 10px",
-                      borderRadius: 999,
-                      border: "1px solid rgba(148,163,184,0.7)",
-                      background: "linear-gradient(to right, #020617, #020617)",
+                      padding: isMobile ? 14 : 16,
+                      borderRadius: 16,
+                      background: "#0b1120",
+                      border: "1px solid rgba(55,65,81,0.9)",
                       color: "#e5e7eb",
-                      cursor: "pointer",
-                      whiteSpace: "nowrap",
                     }}
                   >
-                    コピー
-                  </button>
-                </div>
-                <input
-                  readOnly
-                  value={result.auction_title ?? ""}
-                  placeholder="（生成されます）"
-                  style={{
-                    width: "100%",
-                    padding: "8px 10px",
-                    borderRadius: 10,
-                    border: "1px solid rgba(55,65,81,0.9)",
-                    fontSize: 13,
-                    backgroundColor: "#020617",
-                    color: "#e5e7eb",
-                  }}
-                />
-                <div style={{ marginTop: 8, fontSize: 11, color: "#9ca3af", lineHeight: 1.6 }}>
-                  ※半角は0.5文字相当としてカウントし、上限内に収まるよう自動調整しています。
-                </div>
-              </section>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8 }}>
+                      <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>オークション用タイトル</h3>
+                      <button
+                        type="button"
+                        onClick={() => copyToClipboard(result.auction_title)}
+                        style={{
+                          fontSize: 11,
+                          padding: "4px 10px",
+                          borderRadius: 999,
+                          border: "1px solid rgba(148,163,184,0.7)",
+                          background: "linear-gradient(to right, #020617, #020617)",
+                          color: "#e5e7eb",
+                          cursor: "pointer",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        コピー
+                      </button>
+                    </div>
+                    <input
+                      readOnly
+                      value={result.auction_title ?? ""}
+                      style={{
+                        width: "100%",
+                        padding: "8px 10px",
+                        borderRadius: 10,
+                        border: "1px solid rgba(55,65,81,0.9)",
+                        fontSize: 13,
+                        backgroundColor: "#020617",
+                        color: "#e5e7eb",
+                      }}
+                    />
+                  </section>
+                )}
+              </>
             )}
           </div>
         )}
