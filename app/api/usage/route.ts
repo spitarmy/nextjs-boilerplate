@@ -4,7 +4,7 @@ import { supabase } from "../../../lib/supabase";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const MONTHLY_LIMIT_UNITS = 1000;
+const MONTHLY_LIMIT_UNITS = 1500;
 
 function startOfMonthISO(d = new Date()): string {
   const dt = new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 0);
