@@ -13,7 +13,7 @@ type ListingMode = "flea" | "auction";
 type AssessMode = "normal" | "bundle";
 
 const MONTHLY_LIMIT_UNITS = 1500;
-const OVERAGE_FEE_YEN_PER_UNIT = 50; // 1件50円（0.5件なら25円の計算も可能）
+const OVERAGE_FEE_YEN_PER_UNIT = 50; // 1件50円（0.5件なら25円）
 
 function startOfMonthISO(d = new Date()): string {
   const dt = new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 0);
@@ -106,7 +106,7 @@ function trimYahooLike(str: string, max: number): string {
   return out.trim();
 }
 
-// ===== オークション用タイトル組み立て（AIが出したのを優先しつつ丸める） =====
+// ===== オークション用タイトル組み立て =====
 function buildAuctionTitle(rawTitle: unknown, item_name: string | null, mercari_title: string, output_text: string): string {
   const original = typeof rawTitle === "string" ? rawTitle.trim() : "";
   let base = original || (item_name ?? "").trim() || mercari_title.trim();
@@ -131,9 +131,7 @@ function buildAuctionTitle(rawTitle: unknown, item_name: string | null, mercari_
     if (add) title = `${title} ${add}`.trim();
   }
 
-  if (countYahooLike(title) > 65) {
-    title = trimYahooLike(title, 65);
-  }
+  if (countYahooLike(title) > 65) title = trimYahooLike(title, 65);
   return title;
 }
 
@@ -195,7 +193,6 @@ async function insertUsageEventSplit(params: {
   allow_overage: boolean;
 }) {
   const { user_id, units, assess_mode, listing_mode, allow_overage } = params;
-
   if (!user_id) return;
 
   const nowUsage = await getMonthlyUsageUnits(user_id);
@@ -204,14 +201,7 @@ async function insertUsageEventSplit(params: {
 
   if (after <= MONTHLY_LIMIT_UNITS) {
     await supabase.from("usage_events").insert([
-      {
-        user_id,
-        units,
-        kind: "assess",
-        assess_mode,
-        listing_mode,
-        is_overage: false,
-      },
+      { user_id, units, kind: "assess", assess_mode, listing_mode, is_overage: false },
     ]);
     return;
   }
@@ -220,14 +210,7 @@ async function insertUsageEventSplit(params: {
 
   if (before >= MONTHLY_LIMIT_UNITS) {
     await supabase.from("usage_events").insert([
-      {
-        user_id,
-        units,
-        kind: "assess",
-        assess_mode,
-        listing_mode,
-        is_overage: true,
-      },
+      { user_id, units, kind: "assess", assess_mode, listing_mode, is_overage: true },
     ]);
     return;
   }
@@ -236,125 +219,31 @@ async function insertUsageEventSplit(params: {
   const overPart = Number((units - normalPart).toFixed(1));
 
   const rows: any[] = [];
-  if (normalPart > 0) {
-    rows.push({
-      user_id,
-      units: normalPart,
-      kind: "assess",
-      assess_mode,
-      listing_mode,
-      is_overage: false,
-    });
-  }
-  if (overPart > 0) {
-    rows.push({
-      user_id,
-      units: overPart,
-      kind: "assess",
-      assess_mode,
-      listing_mode,
-      is_overage: true,
-    });
-  }
+  if (normalPart > 0) rows.push({ user_id, units: normalPart, kind: "assess", assess_mode, listing_mode, is_overage: false });
+  if (overPart > 0) rows.push({ user_id, units: overPart, kind: "assess", assess_mode, listing_mode, is_overage: true });
+
   if (rows.length) await supabase.from("usage_events").insert(rows);
 }
 
-/**
- * ===== ユーザー補助入力（全ジャンル対応）=====
- * - “上書き”ではなく “根拠（Evidence）” として扱う
- */
-type UserEvidence = {
-  // フリー入力（最重要：何でも入れられる）
-  free_text?: string;
+// ===== ユーザー設定（学習提供） =====
+async function getUserAllowTraining(user_id: string | null): Promise<boolean> {
+  if (!user_id) return false;
+  try {
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("allow_training")
+      .eq("id", user_id)
+      .maybeSingle();
 
-  // よくある入力（全ジャンルで使える）
-  brand_or_maker?: string;   // ブランド/メーカー
-  model_or_title?: string;   // 型番/商品名（ユーザーがわかる場合）
-  material?: string;         // 素材
-  size?: string;             // サイズ
-  era?: string;              // 時代/年代
-  author_or_artist?: string; // 作家/作者
-  signature_text?: string;   // 署名/銘（読めた文字）
-  seal_text?: string;        // 印文（読めた文字）
-  accessories?: string;      // 付属（箱/鑑定書/栞など）
-  purchase_source?: string;  // 入手経路（任意）
-
-  // 任意：鑑定書/証明情報（ジャンル問わず）
-  certificate?: {
-    issuer?: string;    // 発行元（例：GIA/中央宝石など）
-    report_no?: string; // 番号
-    details?: string;   // 4Cや数値など自由記載
-  };
-};
-
-function normalizeEvidence(body: any): UserEvidence | null {
-  const ev = body?.user_evidence;
-  if (!ev || typeof ev !== "object") return null;
-
-  const takeStr = (v: any) => (typeof v === "string" ? v.trim() : "");
-  const out: UserEvidence = {
-    free_text: takeStr(ev.free_text) || undefined,
-    brand_or_maker: takeStr(ev.brand_or_maker) || undefined,
-    model_or_title: takeStr(ev.model_or_title) || undefined,
-    material: takeStr(ev.material) || undefined,
-    size: takeStr(ev.size) || undefined,
-    era: takeStr(ev.era) || undefined,
-    author_or_artist: takeStr(ev.author_or_artist) || undefined,
-    signature_text: takeStr(ev.signature_text) || undefined,
-    seal_text: takeStr(ev.seal_text) || undefined,
-    accessories: takeStr(ev.accessories) || undefined,
-    purchase_source: takeStr(ev.purchase_source) || undefined,
-    certificate: ev.certificate && typeof ev.certificate === "object"
-      ? {
-          issuer: takeStr(ev.certificate.issuer) || undefined,
-          report_no: takeStr(ev.certificate.report_no) || undefined,
-          details: takeStr(ev.certificate.details) || undefined,
-        }
-      : undefined,
-  };
-
-  // 全部空なら null 扱い
-  const hasAny =
-    Object.values(out).some((v) => (typeof v === "string" && v.length > 0)) ||
-    (out.certificate && Object.values(out.certificate).some((v) => typeof v === "string" && v.length > 0));
-
-  return hasAny ? out : null;
-}
-
-function formatEvidenceForPrompt(ev: UserEvidence | null): string {
-  if (!ev) return "";
-
-  const lines: string[] = [];
-  const push = (label: string, v?: string) => {
-    if (v && v.trim().length) lines.push(`- ${label}: ${v.trim()}`);
-  };
-
-  push("自由入力", ev.free_text);
-  push("ブランド/メーカー", ev.brand_or_maker);
-  push("型番/商品名", ev.model_or_title);
-  push("素材", ev.material);
-  push("サイズ", ev.size);
-  push("時代/年代", ev.era);
-  push("作家/作者", ev.author_or_artist);
-  push("署名/銘（読めた文字）", ev.signature_text);
-  push("印文（読めた文字）", ev.seal_text);
-  push("付属品", ev.accessories);
-  push("入手経路", ev.purchase_source);
-
-  if (ev.certificate) {
-    push("証明/鑑定書 発行元", ev.certificate.issuer);
-    push("証明/鑑定書 番号", ev.certificate.report_no);
-    push("証明/鑑定書 詳細", ev.certificate.details);
+    if (error) {
+      console.error("profiles allow_training select error", error);
+      return false;
+    }
+    return Boolean(data?.allow_training);
+  } catch (e) {
+    console.error("getUserAllowTraining exception", e);
+    return false;
   }
-
-  return [
-    "【USER_EVIDENCE（ユーザー補助情報）】",
-    "以下はユーザーが入力した“補助情報”です。必ず次のルールで扱ってください：",
-    "・真贋/作者/型番を「上書き」せず、根拠として参照する（矛盾があれば矛盾点も書く）",
-    "・画像・刻印・落款が優先だが、鑑定書/証明は強い根拠として扱う",
-    "・特に書画/掛軸は、読めた落款/印文があるなら候補提示の精度を上げること",
-    lines.join("\n"),
-  ].join("\n");
 }
 
 // ===== SYSTEM PROMPT（共通）=====
@@ -370,15 +259,14 @@ const SYSTEM_PROMPT_BASE = [
   "・一致点と不一致点を総合評価し、偏った判定にしない。",
   "・複数商品が写っている場合は値の付きそうな物から査定コメントに記載し、値段も一点ずつ記載する（通常査定）。",
   "",
+  "【ユーザー補助入力の扱い】",
+  "・ユーザーが読めた文字（作者名、落款、銘、型番、刻印、鑑定書の記載等）がある場合は最優先で参照する。",
+  "・ただし、画像と矛盾する場合は『矛盾の可能性』として注意喚起し、断定しない。",
+  "",
   "【リファレンスの扱い】",
   "・リファレンスは参考。しかし古い型・個体差・経年劣化で外れることもあるため、依存しすぎない。",
   "・リファレンスに無い＝即偽物ではない。",
   "・強い矛盾のみ偽物方向の根拠とする。",
-  "",
-  "【書画・掛軸・骨董の注意（重要）】",
-  "・作者/落款は「候補提示＋根拠＋不一致点」で表現し、当てに行く（ただし断定は避ける）。",
-  "・落款が読めない場合でも、筆致/印の形/配置/時代整合で“推定”を出す。",
-  "・作者が外れても相場が破綻しないよう、相場は控えめ・根拠付きで提示する。",
   "",
   "【真贋出力ルール】",
   "以下のいずれかで出力する：",
@@ -395,7 +283,6 @@ const SYSTEM_PROMPT_BASE = [
   "返答はJSONのみ。コードブロック禁止。",
 ].join("\n");
 
-// ===== 通常査定：フリマ用（必要なものだけ）=====
 const PROMPT_NORMAL_FLEA = [
   "【モード】通常査定 / フリマ向け",
   "出力はフリマ向けに最適化すること。",
@@ -423,7 +310,6 @@ const PROMPT_NORMAL_FLEA = [
   "・金額を説明文に書かない",
 ].join("\n");
 
-// ===== 通常査定：オークション用（必要なものだけ）=====
 const PROMPT_NORMAL_AUCTION = [
   "【モード】通常査定 / オークション向け",
   "出力はオークション向けに最適化すること。",
@@ -451,7 +337,6 @@ const PROMPT_NORMAL_AUCTION = [
   "4行目：【想定相場】◯◯,◯◯◯〜◯◯,◯◯◯円前後（◯◯基準）",
 ].join("\n");
 
-// ===== まとめ査定：ピックアップ特化（タイトル生成なし）=====
 const PROMPT_BUNDLE = [
   "【モード】まとめ査定（写真内に複数商品がある想定）",
   "目的：値が付きそうな物を優先して「数点」ピックアップして簡易査定する。",
@@ -478,6 +363,56 @@ const PROMPT_BUNDLE = [
   "・作者断定・真贋断定は根拠（メーカー、文字、特定に足る要素）がない限りしない。",
 ].join("\n");
 
+// ===== ユーザー補助入力（自由） =====
+type UserHints = {
+  known_title?: string;      // 作品名/商品名
+  known_author?: string;     // 作家/作者
+  known_signature?: string;  // 銘/署名/サイン（読めた文字）
+  known_seal?: string;       // 落款（印文）
+  known_model?: string;      // 型番/品番
+  known_material?: string;   // 素材/金性など
+  certificate_text?: string; // 鑑定書/保証書の主要記載（コピペ）
+  notes?: string;            // その他補足（箱書の文言、購入先、年代など）
+};
+
+function normalizeHints(raw: any): UserHints | null {
+  if (!raw || typeof raw !== "object") return null;
+  const pick = (k: string) => (typeof raw[k] === "string" ? raw[k].trim() : "");
+  const hints: UserHints = {
+    known_title: pick("known_title"),
+    known_author: pick("known_author"),
+    known_signature: pick("known_signature"),
+    known_seal: pick("known_seal"),
+    known_model: pick("known_model"),
+    known_material: pick("known_material"),
+    certificate_text: pick("certificate_text"),
+    notes: pick("notes"),
+  };
+  const hasAny = Object.values(hints).some((v) => typeof v === "string" && v.length > 0);
+  if (!hasAny) return null;
+  return hints;
+}
+
+function formatHintsForPrompt(hints: UserHints | null): string | null {
+  if (!hints) return null;
+  const lines: string[] = [];
+  if (hints.known_title) lines.push(`作品/商品名（ユーザー入力）: ${hints.known_title}`);
+  if (hints.known_author) lines.push(`作者/作家名（ユーザー入力）: ${hints.known_author}`);
+  if (hints.known_signature) lines.push(`銘/署名/サイン（ユーザー入力）: ${hints.known_signature}`);
+  if (hints.known_seal) lines.push(`落款・印文（ユーザー入力）: ${hints.known_seal}`);
+  if (hints.known_model) lines.push(`型番/品番（ユーザー入力）: ${hints.known_model}`);
+  if (hints.known_material) lines.push(`素材/金性等（ユーザー入力）: ${hints.known_material}`);
+  if (hints.certificate_text) lines.push(`鑑定書/保証書の記載（ユーザー入力）: ${hints.certificate_text}`);
+  if (hints.notes) lines.push(`補足（ユーザー入力）: ${hints.notes}`);
+
+  return [
+    "【ユーザー補助入力（重要）】",
+    "以下はユーザーが読めた情報/手元資料の情報です。最優先で参照してください。",
+    "ただし画像と矛盾する場合は、矛盾の可能性として注意喚起し断定しないでください。",
+    ...lines,
+  ].join("\n");
+}
+
 export async function POST(req: NextRequest) {
   try {
     if (!process.env.OPENAI_API_KEY) {
@@ -494,17 +429,19 @@ export async function POST(req: NextRequest) {
 
     const assess_mode: AssessMode = (body as any).assess_mode === "bundle" ? "bundle" : "normal";
     const listing_mode: ListingMode = (body as any).listing_mode === "auction" ? "auction" : "flea";
-
     const allow_overage: boolean = Boolean((body as any).allow_overage);
 
-    // ★ NEW: ユーザー補助入力（全ジャンル）
-    const userEvidence = normalizeEvidence(body);
-    const evidenceText = formatEvidenceForPrompt(userEvidence);
+    // ★ 学習提供許可（デフォルト false）
+    const allow_training = await getUserAllowTraining(user_id);
+
+    // ★ ユーザー補助入力
+    const hints: UserHints | null = normalizeHints((body as any).user_hints);
+    const hintsText = formatHintsForPrompt(hints);
 
     // units（まとめ査定は 0.5）
     const units = assess_mode === "bundle" ? 0.5 : 1.0;
 
-    // 画像を抽出
+    // 画像抽出
     const raw = (body as any).image_urls ?? (body as any).images ?? null;
     let images: string[] = [];
 
@@ -524,7 +461,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: "画像データがありません。" }, { status: 400 });
     }
 
-    // ===== 先に月次上限チェック（超過なら 402 を返す）=====
+    // ===== 月次上限チェック =====
     const monthUsage = await getMonthlyUsageUnits(user_id);
     const wouldBe = Number((monthUsage.used + units).toFixed(1));
 
@@ -547,7 +484,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // ===== Supabase リファレンス収集（重いなら後で段階化可能）=====
+    // ===== リファレンス収集 =====
     let referenceBlocks: string[] = [];
 
     try {
@@ -607,7 +544,7 @@ export async function POST(req: NextRequest) {
 
     const referenceText = referenceBlocks.join("\n\n");
 
-    // ===== モード別プロンプト切替（ここが原価削減の本体）=====
+    // ===== モード別プロンプト =====
     let modePrompt = "";
     if (assess_mode === "bundle") {
       modePrompt = PROMPT_BUNDLE;
@@ -615,18 +552,13 @@ export async function POST(req: NextRequest) {
       modePrompt = listing_mode === "auction" ? PROMPT_NORMAL_AUCTION : PROMPT_NORMAL_FLEA;
     }
 
-    // ★ NEW: ユーザー補助入力があればプロンプトに追記
     const content: any[] = [
       { type: "input_text", text: SYSTEM_PROMPT_BASE },
       { type: "input_text", text: modePrompt },
-
-      // user evidence
-      evidenceText ? { type: "input_text", text: evidenceText } : null,
-
+      hintsText ? { type: "input_text", text: hintsText } : null,
       referenceText
         ? { type: "input_text", text: referenceText + "\n---\n上記の参考情報のうち画像に最も近いものを優先的に活用してください。" }
         : null,
-
       ...images.map((u) => ({ type: "input_image", image_url: u })),
     ].filter(Boolean);
 
@@ -645,7 +577,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: "AI出力が空です。" }, { status: 500 });
     }
 
-    // ===== JSONパースの安定化処理 =====
+    // ===== JSONパース安定化 =====
     const cleaned = rawText.replace(/```json/gi, "").replace(/```/g, "").trim();
 
     let parsed: any;
@@ -656,7 +588,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: "AI出力のJSON解析に失敗しました。" }, { status: 500 });
     }
 
-    // output_text の最低保証
+    // output_text 最低保証
     const output_text_raw = typeof parsed.output_text === "string" ? parsed.output_text : String(rawText);
     let output_text = output_text_raw;
     if (!output_text.includes("【想定相場】") && assess_mode !== "bundle") {
@@ -668,7 +600,7 @@ export async function POST(req: NextRequest) {
     const confidence: number | null = typeof parsed.confidence === "number" ? parsed.confidence : null;
     const genre: string | null = typeof parsed.genre === "string" ? parsed.genre.trim() : null;
 
-    // ===== モード別で生成物を分ける（nullで返す）=====
+    // 生成物をモード別に
     let mercari_title: string | null = null;
     let mercari_description: string | null = null;
     let auction_title: string | null = null;
@@ -692,7 +624,7 @@ export async function POST(req: NextRequest) {
       bundle_pickups = null;
     }
 
-    // ===== ここで usage_events を加算（成功時のみ）=====
+    // ===== usage_events 加算（成功時のみ）=====
     await insertUsageEventSplit({
       user_id,
       units,
@@ -701,7 +633,6 @@ export async function POST(req: NextRequest) {
       allow_overage,
     });
 
-    // ===== 最新の利用数を返す（UI即更新用）=====
     const updatedUsage = await getMonthlyUsageUnits(user_id);
 
     // appraisals 保存（既存維持）
@@ -719,40 +650,35 @@ export async function POST(req: NextRequest) {
           output_text,
           image_urls: images,
           model: "gpt-4.1",
-          // ※列が無い場合はエラーになるので保存先を変える必要あり
-          // ここでは列追加が未確定なので触らない
         },
       ]);
     } catch (e) {
       console.error("appraisals 保存中の例外:", e);
     }
 
-    // training_items 保存（既存維持）
+    // ★ 学習提供ONの時だけ training_items 保存（ここが核心）
     try {
-      const isTrainable = confidence !== null && confidence >= 90;
-      await supabase.from("training_items").insert([
-        {
-          genre,
-          item_name,
-          image_urls: images,
-          output_text,
-          mercari_title,
-          mercari_description,
-          auction_title,
-          listing_mode: assess_mode === "bundle" ? "flea" : listing_mode,
-          model: "gpt-4.1",
-          source: "kanteno-web",
-          confidence,
-          is_trainable: isTrainable,
-          raw_request: {
+      if (allow_training) {
+        const isTrainable = confidence !== null && confidence >= 90;
+        await supabase.from("training_items").insert([
+          {
+            genre,
+            item_name,
             image_urls: images,
-            listing_mode,
-            assess_mode,
-            user_evidence: userEvidence, // ★ NEW
+            output_text,
+            mercari_title,
+            mercari_description,
+            auction_title,
+            listing_mode: assess_mode === "bundle" ? "flea" : listing_mode,
+            model: "gpt-4.1",
+            source: "kanteno-web",
+            confidence,
+            is_trainable: isTrainable,
+            raw_request: { image_urls: images, listing_mode, assess_mode, user_hints: hints },
+            raw_response: aiRes,
           },
-          raw_response: aiRes,
-        },
-      ]);
+        ]);
+      }
     } catch (e) {
       console.error("training_items 保存中の例外:", e);
     }
@@ -775,7 +701,7 @@ export async function POST(req: NextRequest) {
             confidence,
             genre,
             item_name,
-            user_evidence: userEvidence, // ★ NEW（列追加なしでJSON内に）
+            user_hints: hints,
           },
           error_message: null,
         },
@@ -797,12 +723,13 @@ export async function POST(req: NextRequest) {
         confidence,
         genre,
         item_name,
-        // ★ NEW: UIで「入力した補助情報」を保持できるよう返す（互換壊さない）
-        user_evidence: userEvidence,
         usage: {
           used_units: updatedUsage.used,
           limit_units: MONTHLY_LIMIT_UNITS,
           overage_units: updatedUsage.over,
+        },
+        settings: {
+          allow_training,
         },
       },
       { status: 200 }
