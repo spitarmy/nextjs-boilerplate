@@ -196,15 +196,12 @@ async function insertUsageEventSplit(params: {
 }) {
   const { user_id, units, assess_mode, listing_mode, allow_overage } = params;
 
-  // user_id 無し運用はカウント不能なので、とりあえず通す（課金運用なら user_id 必須推奨）
   if (!user_id) return;
 
   const nowUsage = await getMonthlyUsageUnits(user_id);
   const before = nowUsage.used;
-
   const after = before + units;
 
-  // 上限未満なら全量通常
   if (after <= MONTHLY_LIMIT_UNITS) {
     await supabase.from("usage_events").insert([
       {
@@ -219,11 +216,8 @@ async function insertUsageEventSplit(params: {
     return;
   }
 
-  // 上限超え：allow_overage が false なら caller 側で弾くので、ここでは入れない
   if (!allow_overage) return;
 
-  // ここから allow_overage=true の時だけ
-  // すでに上限超えているなら、全部 overage
   if (before >= MONTHLY_LIMIT_UNITS) {
     await supabase.from("usage_events").insert([
       {
@@ -238,7 +232,6 @@ async function insertUsageEventSplit(params: {
     return;
   }
 
-  // 境界を跨ぐ：通常分と超過分を分割
   const normalPart = Number((MONTHLY_LIMIT_UNITS - before).toFixed(1));
   const overPart = Number((units - normalPart).toFixed(1));
 
@@ -266,6 +259,104 @@ async function insertUsageEventSplit(params: {
   if (rows.length) await supabase.from("usage_events").insert(rows);
 }
 
+/**
+ * ===== ユーザー補助入力（全ジャンル対応）=====
+ * - “上書き”ではなく “根拠（Evidence）” として扱う
+ */
+type UserEvidence = {
+  // フリー入力（最重要：何でも入れられる）
+  free_text?: string;
+
+  // よくある入力（全ジャンルで使える）
+  brand_or_maker?: string;   // ブランド/メーカー
+  model_or_title?: string;   // 型番/商品名（ユーザーがわかる場合）
+  material?: string;         // 素材
+  size?: string;             // サイズ
+  era?: string;              // 時代/年代
+  author_or_artist?: string; // 作家/作者
+  signature_text?: string;   // 署名/銘（読めた文字）
+  seal_text?: string;        // 印文（読めた文字）
+  accessories?: string;      // 付属（箱/鑑定書/栞など）
+  purchase_source?: string;  // 入手経路（任意）
+
+  // 任意：鑑定書/証明情報（ジャンル問わず）
+  certificate?: {
+    issuer?: string;    // 発行元（例：GIA/中央宝石など）
+    report_no?: string; // 番号
+    details?: string;   // 4Cや数値など自由記載
+  };
+};
+
+function normalizeEvidence(body: any): UserEvidence | null {
+  const ev = body?.user_evidence;
+  if (!ev || typeof ev !== "object") return null;
+
+  const takeStr = (v: any) => (typeof v === "string" ? v.trim() : "");
+  const out: UserEvidence = {
+    free_text: takeStr(ev.free_text) || undefined,
+    brand_or_maker: takeStr(ev.brand_or_maker) || undefined,
+    model_or_title: takeStr(ev.model_or_title) || undefined,
+    material: takeStr(ev.material) || undefined,
+    size: takeStr(ev.size) || undefined,
+    era: takeStr(ev.era) || undefined,
+    author_or_artist: takeStr(ev.author_or_artist) || undefined,
+    signature_text: takeStr(ev.signature_text) || undefined,
+    seal_text: takeStr(ev.seal_text) || undefined,
+    accessories: takeStr(ev.accessories) || undefined,
+    purchase_source: takeStr(ev.purchase_source) || undefined,
+    certificate: ev.certificate && typeof ev.certificate === "object"
+      ? {
+          issuer: takeStr(ev.certificate.issuer) || undefined,
+          report_no: takeStr(ev.certificate.report_no) || undefined,
+          details: takeStr(ev.certificate.details) || undefined,
+        }
+      : undefined,
+  };
+
+  // 全部空なら null 扱い
+  const hasAny =
+    Object.values(out).some((v) => (typeof v === "string" && v.length > 0)) ||
+    (out.certificate && Object.values(out.certificate).some((v) => typeof v === "string" && v.length > 0));
+
+  return hasAny ? out : null;
+}
+
+function formatEvidenceForPrompt(ev: UserEvidence | null): string {
+  if (!ev) return "";
+
+  const lines: string[] = [];
+  const push = (label: string, v?: string) => {
+    if (v && v.trim().length) lines.push(`- ${label}: ${v.trim()}`);
+  };
+
+  push("自由入力", ev.free_text);
+  push("ブランド/メーカー", ev.brand_or_maker);
+  push("型番/商品名", ev.model_or_title);
+  push("素材", ev.material);
+  push("サイズ", ev.size);
+  push("時代/年代", ev.era);
+  push("作家/作者", ev.author_or_artist);
+  push("署名/銘（読めた文字）", ev.signature_text);
+  push("印文（読めた文字）", ev.seal_text);
+  push("付属品", ev.accessories);
+  push("入手経路", ev.purchase_source);
+
+  if (ev.certificate) {
+    push("証明/鑑定書 発行元", ev.certificate.issuer);
+    push("証明/鑑定書 番号", ev.certificate.report_no);
+    push("証明/鑑定書 詳細", ev.certificate.details);
+  }
+
+  return [
+    "【USER_EVIDENCE（ユーザー補助情報）】",
+    "以下はユーザーが入力した“補助情報”です。必ず次のルールで扱ってください：",
+    "・真贋/作者/型番を「上書き」せず、根拠として参照する（矛盾があれば矛盾点も書く）",
+    "・画像・刻印・落款が優先だが、鑑定書/証明は強い根拠として扱う",
+    "・特に書画/掛軸は、読めた落款/印文があるなら候補提示の精度を上げること",
+    lines.join("\n"),
+  ].join("\n");
+}
+
 // ===== SYSTEM PROMPT（共通）=====
 const SYSTEM_PROMPT_BASE = [
   "あなたは骨董・ブランド・和装・雑貨・おもちゃ・時計・家電など幅広い商品を査定するプロの鑑定士AIです。",
@@ -283,6 +374,11 @@ const SYSTEM_PROMPT_BASE = [
   "・リファレンスは参考。しかし古い型・個体差・経年劣化で外れることもあるため、依存しすぎない。",
   "・リファレンスに無い＝即偽物ではない。",
   "・強い矛盾のみ偽物方向の根拠とする。",
+  "",
+  "【書画・掛軸・骨董の注意（重要）】",
+  "・作者/落款は「候補提示＋根拠＋不一致点」で表現し、当てに行く（ただし断定は避ける）。",
+  "・落款が読めない場合でも、筆致/印の形/配置/時代整合で“推定”を出す。",
+  "・作者が外れても相場が破綻しないよう、相場は控えめ・根拠付きで提示する。",
   "",
   "【真贋出力ルール】",
   "以下のいずれかで出力する：",
@@ -401,6 +497,10 @@ export async function POST(req: NextRequest) {
 
     const allow_overage: boolean = Boolean((body as any).allow_overage);
 
+    // ★ NEW: ユーザー補助入力（全ジャンル）
+    const userEvidence = normalizeEvidence(body);
+    const evidenceText = formatEvidenceForPrompt(userEvidence);
+
     // units（まとめ査定は 0.5）
     const units = assess_mode === "bundle" ? 0.5 : 1.0;
 
@@ -515,12 +615,18 @@ export async function POST(req: NextRequest) {
       modePrompt = listing_mode === "auction" ? PROMPT_NORMAL_AUCTION : PROMPT_NORMAL_FLEA;
     }
 
+    // ★ NEW: ユーザー補助入力があればプロンプトに追記
     const content: any[] = [
       { type: "input_text", text: SYSTEM_PROMPT_BASE },
       { type: "input_text", text: modePrompt },
+
+      // user evidence
+      evidenceText ? { type: "input_text", text: evidenceText } : null,
+
       referenceText
         ? { type: "input_text", text: referenceText + "\n---\n上記の参考情報のうち画像に最も近いものを優先的に活用してください。" }
         : null,
+
       ...images.map((u) => ({ type: "input_image", image_url: u })),
     ].filter(Boolean);
 
@@ -579,8 +685,7 @@ export async function POST(req: NextRequest) {
       auction_title = null;
       bundle_pickups = null;
     } else {
-      // auction
-      const tmpMercariTitle = buildMercariTitle(parsed.mercari_title, item_name, output_text); // 補助用（AIが空でもタイトル構成の材料）
+      const tmpMercariTitle = buildMercariTitle(parsed.mercari_title, item_name, output_text);
       auction_title = buildAuctionTitle(parsed.auction_title, item_name, tmpMercariTitle, output_text);
       mercari_title = null;
       mercari_description = null;
@@ -614,6 +719,8 @@ export async function POST(req: NextRequest) {
           output_text,
           image_urls: images,
           model: "gpt-4.1",
+          // ※列が無い場合はエラーになるので保存先を変える必要あり
+          // ここでは列追加が未確定なので触らない
         },
       ]);
     } catch (e) {
@@ -637,7 +744,12 @@ export async function POST(req: NextRequest) {
           source: "kanteno-web",
           confidence,
           is_trainable: isTrainable,
-          raw_request: { image_urls: images, listing_mode, assess_mode },
+          raw_request: {
+            image_urls: images,
+            listing_mode,
+            assess_mode,
+            user_evidence: userEvidence, // ★ NEW
+          },
           raw_response: aiRes,
         },
       ]);
@@ -663,6 +775,7 @@ export async function POST(req: NextRequest) {
             confidence,
             genre,
             item_name,
+            user_evidence: userEvidence, // ★ NEW（列追加なしでJSON内に）
           },
           error_message: null,
         },
@@ -684,6 +797,8 @@ export async function POST(req: NextRequest) {
         confidence,
         genre,
         item_name,
+        // ★ NEW: UIで「入力した補助情報」を保持できるよう返す（互換壊さない）
+        user_evidence: userEvidence,
         usage: {
           used_units: updatedUsage.used,
           limit_units: MONTHLY_LIMIT_UNITS,
