@@ -12,31 +12,20 @@ type BundlePickup = {
   price_hint?: string; // 例: "2,000〜4,000円前後"
 };
 
-type UserEvidence = {
-  free_text?: string;
-
-  brand_or_maker?: string;
-  model_or_title?: string;
-  material?: string;
-  size?: string;
-  era?: string;
-  author_or_artist?: string;
-  signature_text?: string;
-  seal_text?: string;
-  accessories?: string;
-  purchase_source?: string;
-
-  certificate?: {
-    issuer?: string;
-    report_no?: string;
-    details?: string;
-  };
+type UserHints = {
+  known_title?: string;
+  known_author?: string;
+  known_signature?: string;
+  known_seal?: string;
+  known_model?: string;
+  known_material?: string;
+  certificate_text?: string;
+  notes?: string;
 };
 
 type AssessResponse = {
   ok: boolean;
 
-  // 共通
   output_text?: string;
   listing_mode?: ListingMode;
   assess_mode?: AssessMode;
@@ -44,27 +33,24 @@ type AssessResponse = {
   genre?: string | null;
   item_name?: string | null;
 
-  // 通常（フリマ/オークション）
   mercari_title?: string | null;
   mercari_description?: string | null;
   auction_title?: string | null;
 
-  // まとめ査定（ピックアップ）
   bundle_pickups?: BundlePickup[] | null;
 
-  // NEW
-  user_evidence?: UserEvidence | null;
-
-  // 利用数関連
   usage?: {
     used_units: number;
     limit_units: number;
     overage_units: number;
   };
 
-  // 超過関連
   over_limit?: boolean;
   required_overage_fee_yen?: number;
+
+  settings?: {
+    allow_training?: boolean;
+  };
 
   error?: string;
 };
@@ -76,12 +62,12 @@ const MAX_FILES = 5;
 const MAX_ORIGINAL_SIZE_PER_FILE = 10 * 1024 * 1024; // 10MB/枚
 const MAX_ORIGINAL_TOTAL_SIZE = 25 * 1024 * 1024; // 合計25MB（元画像の目安）
 
-// ★ 5枚対応で安定させるため軽量化
+// ★ 軽量化
 const MAX_LONG_SIDE = 720;
 const JPEG_QUALITY = 0.65;
 
-// ★ dataURL合計が大きいと /api/assess 送信で落ちやすいので事前ガード
-const MAX_TOTAL_DATAURL_BYTES = 6 * 1024 * 1024; // 6MB目安（安全側）
+// ★ dataURL合計ガード
+const MAX_TOTAL_DATAURL_BYTES = 6 * 1024 * 1024; // 6MB目安
 
 function estimateDataUrlBytes(dataUrl: string): number {
   const comma = dataUrl.indexOf(",");
@@ -117,11 +103,6 @@ async function fileToCompressedDataUrl(file: File): Promise<string> {
   return dataUrl;
 }
 
-function cleanStr(s: string): string | undefined {
-  const t = (s ?? "").trim();
-  return t.length ? t : undefined;
-}
-
 export default function UploadForm() {
   const [files, setFiles] = useState<File[]>([]);
   const [result, setResult] = useState<AssessResponse | null>(null);
@@ -130,40 +111,29 @@ export default function UploadForm() {
 
   const [userId, setUserId] = useState<string | null>(null);
 
-  // 出力モード（フリマ / オークション）
   const [listingMode, setListingMode] = useState<ListingMode>("flea");
-
-  // 査定モード（通常 / まとめ）
   const [assessMode, setAssessMode] = useState<AssessMode>("normal");
 
-  // 月次利用数
   const [usage, setUsage] = useState<{ used_units: number; limit_units: number; overage_units: number } | null>(null);
 
-  // 超過で続行するフラグ（ボタンで true にして再送）
   const [allowOverage, setAllowOverage] = useState(false);
 
-  // 画面幅に応じてレイアウト切り替え（スマホは1カラム）
   const [isMobile, setIsMobile] = useState(false);
 
-  // ★ NEW: ユーザー補助入力（全ジャンル共通）
-  const [evidenceOpen, setEvidenceOpen] = useState(true);
-  const [userEvidence, setUserEvidence] = useState<UserEvidence>({
-    free_text: "",
-    brand_or_maker: "",
-    model_or_title: "",
-    material: "",
-    size: "",
-    era: "",
-    author_or_artist: "",
-    signature_text: "",
-    seal_text: "",
-    accessories: "",
-    purchase_source: "",
-    certificate: {
-      issuer: "",
-      report_no: "",
-      details: "",
-    },
+  // ★ 学習提供設定
+  const [allowTraining, setAllowTraining] = useState(false);
+  const [settingsLoading, setSettingsLoading] = useState(false);
+
+  // ★ ユーザー補助入力
+  const [hints, setHints] = useState<UserHints>({
+    known_title: "",
+    known_author: "",
+    known_signature: "",
+    known_seal: "",
+    known_model: "",
+    known_material: "",
+    certificate_text: "",
+    notes: "",
   });
 
   const isFlea = listingMode === "flea";
@@ -182,6 +152,7 @@ export default function UploadForm() {
       setUserId(id);
       if (id) {
         await refreshUsage(id);
+        await refreshSettings(id);
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -199,11 +170,41 @@ export default function UploadForm() {
     try {
       const res = await fetch(`/api/usage?user_id=${encodeURIComponent(uid)}`);
       const json = await res.json();
-      if (res.ok && json?.ok) {
-        setUsage(json.usage);
-      }
+      if (res.ok && json?.ok) setUsage(json.usage);
     } catch {
       // 無視
+    }
+  };
+
+  const refreshSettings = async (uid: string) => {
+    try {
+      const res = await fetch(`/api/user-settings?user_id=${encodeURIComponent(uid)}`);
+      const json = await res.json();
+      if (res.ok && json?.ok) setAllowTraining(Boolean(json?.settings?.allow_training));
+    } catch {
+      // 無視
+    }
+  };
+
+  const updateAllowTraining = async (next: boolean) => {
+    if (!userId) return;
+    setSettingsLoading(true);
+    try {
+      const res = await fetch("/api/user-settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: userId, allow_training: next }),
+      });
+      const json = await res.json();
+      if (res.ok && json?.ok) {
+        setAllowTraining(Boolean(json?.settings?.allow_training));
+      } else {
+        alert(json?.error || "設定の更新に失敗しました");
+      }
+    } catch {
+      alert("通信エラーが発生しました");
+    } finally {
+      setSettingsLoading(false);
     }
   };
 
@@ -231,33 +232,6 @@ export default function UploadForm() {
     }
   };
 
-  const buildEvidencePayload = (): UserEvidence | null => {
-    const ev: UserEvidence = {
-      free_text: cleanStr(userEvidence.free_text ?? ""),
-      brand_or_maker: cleanStr(userEvidence.brand_or_maker ?? ""),
-      model_or_title: cleanStr(userEvidence.model_or_title ?? ""),
-      material: cleanStr(userEvidence.material ?? ""),
-      size: cleanStr(userEvidence.size ?? ""),
-      era: cleanStr(userEvidence.era ?? ""),
-      author_or_artist: cleanStr(userEvidence.author_or_artist ?? ""),
-      signature_text: cleanStr(userEvidence.signature_text ?? ""),
-      seal_text: cleanStr(userEvidence.seal_text ?? ""),
-      accessories: cleanStr(userEvidence.accessories ?? ""),
-      purchase_source: cleanStr(userEvidence.purchase_source ?? ""),
-      certificate: {
-        issuer: cleanStr(userEvidence.certificate?.issuer ?? ""),
-        report_no: cleanStr(userEvidence.certificate?.report_no ?? ""),
-        details: cleanStr(userEvidence.certificate?.details ?? ""),
-      },
-    };
-
-    const hasAny =
-      Object.values(ev).some((v) => typeof v === "string" && v.length > 0) ||
-      (ev.certificate && Object.values(ev.certificate).some((v) => typeof v === "string" && v.length > 0));
-
-    return hasAny ? ev : null;
-  };
-
   const submitInternal = async (overage: boolean) => {
     setErrorMsg(null);
     setResult(null);
@@ -271,7 +245,6 @@ export default function UploadForm() {
       return;
     }
 
-    // 元画像の容量チェック（目安）
     let totalSize = 0;
     for (const f of files) {
       totalSize += f.size;
@@ -302,7 +275,12 @@ export default function UploadForm() {
         imageUrls.push(dataUrl);
       }
 
-      const evPayload = buildEvidencePayload();
+      // ★ 空文字は送らない（API側でnull扱いしやすく）
+      const userHints: UserHints = {};
+      (Object.keys(hints) as (keyof UserHints)[]).forEach((k) => {
+        const v = (hints[k] ?? "").toString().trim();
+        if (v) userHints[k] = v;
+      });
 
       const res = await fetch("/api/assess", {
         method: "POST",
@@ -313,13 +291,12 @@ export default function UploadForm() {
           listing_mode: listingMode,
           assess_mode: assessMode,
           allow_overage: overage,
-          user_evidence: evPayload, // ★ NEW
+          user_hints: Object.keys(userHints).length ? userHints : null,
         }),
       });
 
       const json: AssessResponse = await res.json();
 
-      // 利用数UI更新
       if (json?.usage) setUsage(json.usage);
       else if (userId) await refreshUsage(userId);
 
@@ -348,6 +325,18 @@ export default function UploadForm() {
     e.preventDefault();
     await submitInternal(false);
   };
+
+  const inputStyle: React.CSSProperties = {
+    width: "100%",
+    padding: "8px 10px",
+    borderRadius: 10,
+    border: "1px solid rgba(55,65,81,0.9)",
+    fontSize: 13,
+    backgroundColor: "#020617",
+    color: "#e5e7eb",
+  };
+
+  const labelStyle: React.CSSProperties = { fontSize: 12, fontWeight: 700, color: "#e5e7eb", marginBottom: 6 };
 
   return (
     <div
@@ -397,11 +386,156 @@ export default function UploadForm() {
           )}
         </div>
 
+        {/* ★ 学習提供設定 */}
+        <div
+          style={{
+            marginBottom: 12,
+            padding: 10,
+            borderRadius: 14,
+            border: "1px solid rgba(148,163,184,0.35)",
+            backgroundColor: "rgba(2,6,23,0.55)",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 800, color: "#e5e7eb" }}>査定データを学習に利用</div>
+              <div style={{ marginTop: 4, fontSize: 11, color: "#9ca3af", lineHeight: 1.6 }}>
+                ※ONにすると、あなたの査定結果をカンテノの教師データとして利用します（いつでも変更可）
+              </div>
+            </div>
+
+            <button
+              type="button"
+              disabled={!userId || settingsLoading}
+              onClick={() => updateAllowTraining(!allowTraining)}
+              style={{
+                minWidth: 86,
+                padding: "8px 10px",
+                borderRadius: 999,
+                border: allowTraining ? "1px solid rgba(34,197,94,0.7)" : "1px solid rgba(148,163,184,0.45)",
+                background: allowTraining ? "rgba(34,197,94,0.18)" : "rgba(2,6,23,0.35)",
+                color: allowTraining ? "#bbf7d0" : "#e5e7eb",
+                fontSize: 12,
+                fontWeight: 900,
+                cursor: !userId || settingsLoading ? "default" : "pointer",
+                opacity: !userId ? 0.6 : 1,
+              }}
+            >
+              {allowTraining ? "ON" : "OFF"}
+            </button>
+          </div>
+
+          {!userId && <div style={{ marginTop: 8, fontSize: 11, color: "#fca5a5" }}>※ログインすると設定できます</div>}
+        </div>
+
+        {/* ★ ユーザー補助入力 */}
+        <div
+          style={{
+            marginBottom: 12,
+            padding: 10,
+            borderRadius: 14,
+            border: "1px solid rgba(148,163,184,0.35)",
+            backgroundColor: "rgba(2,6,23,0.55)",
+          }}
+        >
+          <div style={{ fontSize: 12, fontWeight: 800, color: "#e5e7eb", marginBottom: 8 }}>補助入力（読めた情報がある場合）</div>
+
+          <div style={{ display: "grid", gap: 10 }}>
+            <div>
+              <div style={labelStyle}>作品/商品名（任意）</div>
+              <input
+                value={hints.known_title ?? ""}
+                onChange={(e) => setHints((p) => ({ ...p, known_title: e.target.value }))}
+                placeholder="例：山水図 掛軸 / CHANEL マトラッセ / 南部鉄瓶 など"
+                style={inputStyle}
+              />
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 10 }}>
+              <div>
+                <div style={labelStyle}>作者/作家名（任意）</div>
+                <input
+                  value={hints.known_author ?? ""}
+                  onChange={(e) => setHints((p) => ({ ...p, known_author: e.target.value }))}
+                  placeholder="例：横山大観 / 〇〇窯 / Cartier など"
+                  style={inputStyle}
+                />
+              </div>
+              <div>
+                <div style={labelStyle}>型番/品番（任意）</div>
+                <input
+                  value={hints.known_model ?? ""}
+                  onChange={(e) => setHints((p) => ({ ...p, known_model: e.target.value }))}
+                  placeholder="例：Ref.XXXX / 型番 / 品番"
+                  style={inputStyle}
+                />
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 10 }}>
+              <div>
+                <div style={labelStyle}>銘/署名（読めた文字）（任意）</div>
+                <input
+                  value={hints.known_signature ?? ""}
+                  onChange={(e) => setHints((p) => ({ ...p, known_signature: e.target.value }))}
+                  placeholder="例：『大観』/ 『清水六兵衛』/ 刻印文字など"
+                  style={inputStyle}
+                />
+              </div>
+              <div>
+                <div style={labelStyle}>落款・印文（任意）</div>
+                <input
+                  value={hints.known_seal ?? ""}
+                  onChange={(e) => setHints((p) => ({ ...p, known_seal: e.target.value }))}
+                  placeholder="例：朱印の文字 / 〇〇印 など"
+                  style={inputStyle}
+                />
+              </div>
+            </div>
+
+            <div>
+              <div style={labelStyle}>素材/金性など（任意）</div>
+              <input
+                value={hints.known_material ?? ""}
+                onChange={(e) => setHints((p) => ({ ...p, known_material: e.target.value }))}
+                placeholder="例：K18 / SV925 / 絹本 / 紙本 / 鉄 など"
+                style={inputStyle}
+              />
+            </div>
+
+            <div>
+              <div style={labelStyle}>鑑定書・保証書の記載（任意 / コピペ可）</div>
+              <textarea
+                value={hints.certificate_text ?? ""}
+                onChange={(e) => setHints((p) => ({ ...p, certificate_text: e.target.value }))}
+                placeholder="例：4C、鑑別書番号、作家名、箱書の文言など"
+                rows={isMobile ? 3 : 4}
+                style={{ ...inputStyle, resize: "vertical" }}
+              />
+            </div>
+
+            <div>
+              <div style={labelStyle}>補足（任意）</div>
+              <textarea
+                value={hints.notes ?? ""}
+                onChange={(e) => setHints((p) => ({ ...p, notes: e.target.value }))}
+                placeholder="例：購入先、年代の心当たり、箱書あり、共箱、付属品、気になる点など"
+                rows={isMobile ? 3 : 4}
+                style={{ ...inputStyle, resize: "vertical" }}
+              />
+            </div>
+
+            <div style={{ fontSize: 11, color: "#9ca3af", lineHeight: 1.6 }}>
+              ※ここに入れた情報はAIが最優先で参照します（ただし画像と矛盾する場合は注意喚起します）
+            </div>
+          </div>
+        </div>
+
         <p style={{ fontSize: 12, color: "#d1d5db", margin: "0 0 14px", lineHeight: 1.7 }}>
           最大 {MAX_FILES} 枚までアップロードできます。画像は長辺{MAX_LONG_SIDE}pxに自動圧縮されます。
         </p>
 
-        {/* 査定モード（通常 / まとめ） */}
+        {/* 査定モード */}
         <div
           style={{
             marginBottom: 12,
@@ -455,7 +589,7 @@ export default function UploadForm() {
           </div>
         </div>
 
-        {/* 出力モード（通常査定のときだけ） */}
+        {/* 出力モード（通常査定のみ） */}
         {assessMode === "normal" && (
           <div
             style={{
@@ -512,270 +646,6 @@ export default function UploadForm() {
           </div>
         )}
 
-        {/* ★ NEW: 補助情報入力（全ジャンル共通） */}
-        <div
-          style={{
-            marginBottom: 12,
-            padding: 12,
-            borderRadius: 14,
-            border: "1px solid rgba(148,163,184,0.35)",
-            backgroundColor: "rgba(2,6,23,0.55)",
-          }}
-        >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-            <div style={{ fontSize: 12, color: "#e5e7eb", fontWeight: 700 }}>補助情報（任意）</div>
-            <button
-              type="button"
-              onClick={() => setEvidenceOpen((v) => !v)}
-              style={{
-                fontSize: 11,
-                padding: "4px 10px",
-                borderRadius: 999,
-                border: "1px solid rgba(148,163,184,0.5)",
-                background: "rgba(2,6,23,0.25)",
-                color: "#e5e7eb",
-                cursor: "pointer",
-              }}
-            >
-              {evidenceOpen ? "折りたたむ" : "開く"}
-            </button>
-          </div>
-
-          <div style={{ marginTop: 6, fontSize: 11, color: "#9ca3af", lineHeight: 1.6 }}>
-            ※わかる範囲でOK。入力すると、作者/落款/型番/相場の精度が上がります（上書きではなく根拠として使用）。
-          </div>
-
-          {evidenceOpen && (
-            <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
-              <textarea
-                value={userEvidence.free_text ?? ""}
-                onChange={(e) => setUserEvidence((p) => ({ ...p, free_text: e.target.value }))}
-                placeholder="自由入力（例：箱書あり、読める文字、購入店、鑑定書あり、特徴など）"
-                rows={3}
-                style={{
-                  width: "100%",
-                  padding: "8px 10px",
-                  borderRadius: 10,
-                  border: "1px solid rgba(55,65,81,0.9)",
-                  fontSize: 12,
-                  backgroundColor: "#020617",
-                  color: "#e5e7eb",
-                  resize: "vertical",
-                }}
-              />
-
-              <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 10 }}>
-                <input
-                  value={userEvidence.brand_or_maker ?? ""}
-                  onChange={(e) => setUserEvidence((p) => ({ ...p, brand_or_maker: e.target.value }))}
-                  placeholder="ブランド/メーカー（任意）"
-                  style={{
-                    width: "100%",
-                    padding: "8px 10px",
-                    borderRadius: 10,
-                    border: "1px solid rgba(55,65,81,0.9)",
-                    fontSize: 12,
-                    backgroundColor: "#020617",
-                    color: "#e5e7eb",
-                  }}
-                />
-                <input
-                  value={userEvidence.model_or_title ?? ""}
-                  onChange={(e) => setUserEvidence((p) => ({ ...p, model_or_title: e.target.value }))}
-                  placeholder="型番/商品名（任意）"
-                  style={{
-                    width: "100%",
-                    padding: "8px 10px",
-                    borderRadius: 10,
-                    border: "1px solid rgba(55,65,81,0.9)",
-                    fontSize: 12,
-                    backgroundColor: "#020617",
-                    color: "#e5e7eb",
-                  }}
-                />
-                <input
-                  value={userEvidence.material ?? ""}
-                  onChange={(e) => setUserEvidence((p) => ({ ...p, material: e.target.value }))}
-                  placeholder="素材（任意）"
-                  style={{
-                    width: "100%",
-                    padding: "8px 10px",
-                    borderRadius: 10,
-                    border: "1px solid rgba(55,65,81,0.9)",
-                    fontSize: 12,
-                    backgroundColor: "#020617",
-                    color: "#e5e7eb",
-                  }}
-                />
-                <input
-                  value={userEvidence.size ?? ""}
-                  onChange={(e) => setUserEvidence((p) => ({ ...p, size: e.target.value }))}
-                  placeholder="サイズ（任意）"
-                  style={{
-                    width: "100%",
-                    padding: "8px 10px",
-                    borderRadius: 10,
-                    border: "1px solid rgba(55,65,81,0.9)",
-                    fontSize: 12,
-                    backgroundColor: "#020617",
-                    color: "#e5e7eb",
-                  }}
-                />
-                <input
-                  value={userEvidence.era ?? ""}
-                  onChange={(e) => setUserEvidence((p) => ({ ...p, era: e.target.value }))}
-                  placeholder="時代/年代（任意）"
-                  style={{
-                    width: "100%",
-                    padding: "8px 10px",
-                    borderRadius: 10,
-                    border: "1px solid rgba(55,65,81,0.9)",
-                    fontSize: 12,
-                    backgroundColor: "#020617",
-                    color: "#e5e7eb",
-                  }}
-                />
-                <input
-                  value={userEvidence.author_or_artist ?? ""}
-                  onChange={(e) => setUserEvidence((p) => ({ ...p, author_or_artist: e.target.value }))}
-                  placeholder="作家/作者（任意）"
-                  style={{
-                    width: "100%",
-                    padding: "8px 10px",
-                    borderRadius: 10,
-                    border: "1px solid rgba(55,65,81,0.9)",
-                    fontSize: 12,
-                    backgroundColor: "#020617",
-                    color: "#e5e7eb",
-                  }}
-                />
-                <input
-                  value={userEvidence.signature_text ?? ""}
-                  onChange={(e) => setUserEvidence((p) => ({ ...p, signature_text: e.target.value }))}
-                  placeholder="署名/銘（読めた文字）例：『大観』など"
-                  style={{
-                    width: "100%",
-                    padding: "8px 10px",
-                    borderRadius: 10,
-                    border: "1px solid rgba(55,65,81,0.9)",
-                    fontSize: 12,
-                    backgroundColor: "#020617",
-                    color: "#e5e7eb",
-                  }}
-                />
-                <input
-                  value={userEvidence.seal_text ?? ""}
-                  onChange={(e) => setUserEvidence((p) => ({ ...p, seal_text: e.target.value }))}
-                  placeholder="印文（読めた文字）例：『〇〇印』など"
-                  style={{
-                    width: "100%",
-                    padding: "8px 10px",
-                    borderRadius: 10,
-                    border: "1px solid rgba(55,65,81,0.9)",
-                    fontSize: 12,
-                    backgroundColor: "#020617",
-                    color: "#e5e7eb",
-                  }}
-                />
-                <input
-                  value={userEvidence.accessories ?? ""}
-                  onChange={(e) => setUserEvidence((p) => ({ ...p, accessories: e.target.value }))}
-                  placeholder="付属品（箱/栞/鑑定書/保証書など）"
-                  style={{
-                    width: "100%",
-                    padding: "8px 10px",
-                    borderRadius: 10,
-                    border: "1px solid rgba(55,65,81,0.9)",
-                    fontSize: 12,
-                    backgroundColor: "#020617",
-                    color: "#e5e7eb",
-                  }}
-                />
-                <input
-                  value={userEvidence.purchase_source ?? ""}
-                  onChange={(e) => setUserEvidence((p) => ({ ...p, purchase_source: e.target.value }))}
-                  placeholder="入手経路（任意）例：百貨店、骨董市、譲渡など"
-                  style={{
-                    width: "100%",
-                    padding: "8px 10px",
-                    borderRadius: 10,
-                    border: "1px solid rgba(55,65,81,0.9)",
-                    fontSize: 12,
-                    backgroundColor: "#020617",
-                    color: "#e5e7eb",
-                  }}
-                />
-              </div>
-
-              <div style={{ marginTop: 4, fontSize: 11, color: "#cbd5f5", fontWeight: 700 }}>
-                証明/鑑定書（任意）
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 10 }}>
-                <input
-                  value={userEvidence.certificate?.issuer ?? ""}
-                  onChange={(e) =>
-                    setUserEvidence((p) => ({
-                      ...p,
-                      certificate: { ...(p.certificate ?? {}), issuer: e.target.value },
-                    }))
-                  }
-                  placeholder="発行元（例：GIA/中央宝石/AGT など）"
-                  style={{
-                    width: "100%",
-                    padding: "8px 10px",
-                    borderRadius: 10,
-                    border: "1px solid rgba(55,65,81,0.9)",
-                    fontSize: 12,
-                    backgroundColor: "#020617",
-                    color: "#e5e7eb",
-                  }}
-                />
-                <input
-                  value={userEvidence.certificate?.report_no ?? ""}
-                  onChange={(e) =>
-                    setUserEvidence((p) => ({
-                      ...p,
-                      certificate: { ...(p.certificate ?? {}), report_no: e.target.value },
-                    }))
-                  }
-                  placeholder="番号（任意）"
-                  style={{
-                    width: "100%",
-                    padding: "8px 10px",
-                    borderRadius: 10,
-                    border: "1px solid rgba(55,65,81,0.9)",
-                    fontSize: 12,
-                    backgroundColor: "#020617",
-                    color: "#e5e7eb",
-                  }}
-                />
-                <textarea
-                  value={userEvidence.certificate?.details ?? ""}
-                  onChange={(e) =>
-                    setUserEvidence((p) => ({
-                      ...p,
-                      certificate: { ...(p.certificate ?? {}), details: e.target.value },
-                    }))
-                  }
-                  placeholder="詳細（例：4C、寸法、グレーディングなど）"
-                  rows={2}
-                  style={{
-                    gridColumn: isMobile ? "auto" : "1 / -1",
-                    width: "100%",
-                    padding: "8px 10px",
-                    borderRadius: 10,
-                    border: "1px solid rgba(55,65,81,0.9)",
-                    fontSize: 12,
-                    backgroundColor: "#020617",
-                    color: "#e5e7eb",
-                    resize: "vertical",
-                  }}
-                />
-              </div>
-            </div>
-          )}
-        </div>
-
         <form onSubmit={handleSubmit}>
           <label style={{ display: "block", fontSize: 13, marginBottom: 8, color: "#f9fafb" }}>
             商品画像（1〜{MAX_FILES} 枚）
@@ -828,7 +698,6 @@ export default function UploadForm() {
             {loading ? "AIが査定しています…" : "AI査定を開始する"}
           </button>
 
-          {/* 超過で続行 */}
           {allowOverage && (
             <button
               type="button"
@@ -871,14 +740,7 @@ export default function UploadForm() {
       </section>
 
       {/* 右側：結果 */}
-      <section
-        style={{
-          marginTop: isMobile ? 16 : 0,
-          display: "flex",
-          flexDirection: "column",
-          gap: 14,
-        }}
-      >
+      <section style={{ marginTop: isMobile ? 16 : 0, display: "flex", flexDirection: "column", gap: 14 }}>
         {!result && (
           <div
             style={{
@@ -926,25 +788,7 @@ export default function UploadForm() {
               </div>
             </section>
 
-            {/* NEW: ユーザー補助入力の表示（控えめに） */}
-            {result.user_evidence && (
-              <section
-                style={{
-                  padding: isMobile ? 14 : 16,
-                  borderRadius: 16,
-                  background: "#0b1120",
-                  border: "1px solid rgba(55,65,81,0.9)",
-                  color: "#e5e7eb",
-                }}
-              >
-                <h3 style={{ margin: "0 0 10px", fontSize: 14, fontWeight: 700 }}>補助情報（入力内容）</h3>
-                <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontSize: 12, lineHeight: 1.6, color: "#cbd5f5" }}>
-                  {JSON.stringify(result.user_evidence, null, 2)}
-                </pre>
-              </section>
-            )}
-
-            {/* まとめ査定：ピックアップ */}
+            {/* まとめ査定 */}
             {result.assess_mode === "bundle" && Array.isArray(result.bundle_pickups) && (
               <section
                 style={{
@@ -958,7 +802,15 @@ export default function UploadForm() {
                 <h3 style={{ margin: "0 0 10px", fontSize: 14, fontWeight: 700 }}>ピックアップ査定（数点）</h3>
                 <div style={{ display: "grid", gap: 10 }}>
                   {result.bundle_pickups.map((p, idx) => (
-                    <div key={idx} style={{ padding: 10, borderRadius: 12, border: "1px solid rgba(148,163,184,0.25)", background: "rgba(2,6,23,0.35)" }}>
+                    <div
+                      key={idx}
+                      style={{
+                        padding: 10,
+                        borderRadius: 12,
+                        border: "1px solid rgba(148,163,184,0.25)",
+                        background: "rgba(2,6,23,0.35)",
+                      }}
+                    >
                       <div style={{ fontSize: 13, fontWeight: 700 }}>{p.item_name}</div>
                       {p.price_hint && <div style={{ marginTop: 4, fontSize: 12, color: "#cbd5f5" }}>目安: {p.price_hint}</div>}
                       {p.notes && <div style={{ marginTop: 4, fontSize: 12, color: "#9ca3af", lineHeight: 1.6 }}>{p.notes}</div>}
@@ -968,7 +820,7 @@ export default function UploadForm() {
               </section>
             )}
 
-            {/* 通常査定：タブで表示切替 */}
+            {/* 通常査定 */}
             {result.assess_mode !== "bundle" && (
               <>
                 {isFlea && (
@@ -1002,19 +854,7 @@ export default function UploadForm() {
                           コピー
                         </button>
                       </div>
-                      <input
-                        readOnly
-                        value={result.mercari_title ?? ""}
-                        style={{
-                          width: "100%",
-                          padding: "8px 10px",
-                          borderRadius: 10,
-                          border: "1px solid rgba(55,65,81,0.9)",
-                          fontSize: 13,
-                          backgroundColor: "#020617",
-                          color: "#e5e7eb",
-                        }}
-                      />
+                      <input readOnly value={result.mercari_title ?? ""} style={inputStyle} />
                     </section>
 
                     {/* フリマ用説明文 */}
@@ -1046,21 +886,7 @@ export default function UploadForm() {
                           コピー
                         </button>
                       </div>
-                      <textarea
-                        readOnly
-                        value={result.mercari_description ?? ""}
-                        rows={isMobile ? 6 : 8}
-                        style={{
-                          width: "100%",
-                          padding: "8px 10px",
-                          borderRadius: 10,
-                          border: "1px solid rgba(55,65,81,0.9)",
-                          fontSize: 13,
-                          backgroundColor: "#020617",
-                          color: "#e5e7eb",
-                          resize: "vertical",
-                        }}
-                      />
+                      <textarea readOnly value={result.mercari_description ?? ""} rows={isMobile ? 6 : 8} style={{ ...inputStyle, resize: "vertical" }} />
                     </section>
                   </>
                 )}
@@ -1094,20 +920,7 @@ export default function UploadForm() {
                         コピー
                       </button>
                     </div>
-                    <input
-                      readOnly
-                      value={result.auction_title ?? ""}
-                      placeholder="（生成されます）"
-                      style={{
-                        width: "100%",
-                        padding: "8px 10px",
-                        borderRadius: 10,
-                        border: "1px solid rgba(55,65,81,0.9)",
-                        fontSize: 13,
-                        backgroundColor: "#020617",
-                        color: "#e5e7eb",
-                      }}
-                    />
+                    <input readOnly value={result.auction_title ?? ""} placeholder="（生成されます）" style={inputStyle} />
                     <div style={{ marginTop: 8, fontSize: 11, color: "#9ca3af", lineHeight: 1.6 }}>
                       ※半角は0.5文字相当としてカウントし、上限内に収まるよう自動調整しています。
                     </div>
