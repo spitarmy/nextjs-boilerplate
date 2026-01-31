@@ -103,6 +103,12 @@ async function fileToCompressedDataUrl(file: File): Promise<string> {
   return dataUrl;
 }
 
+// ★ 同一ファイル重複追加を軽減（完璧ではないが実用的）
+function fileKey(f: File): string {
+  // name/size/lastModified の組み合わせで「同じファイル」を弾く
+  return `${f.name}::${f.size}::${f.lastModified}`;
+}
+
 export default function UploadForm() {
   const [files, setFiles] = useState<File[]>([]);
   const [result, setResult] = useState<AssessResponse | null>(null);
@@ -218,21 +224,56 @@ export default function UploadForm() {
     }
   };
 
+  // ★ 追加（append）で反映する：既存 + 新規 -> 重複排除 -> 上限で切る
+  const appendFiles = (selected: File[]) => {
+    setFiles((prev) => {
+      const prevMap = new Map<string, File>();
+      for (const f of prev) prevMap.set(fileKey(f), f);
+
+      for (const f of selected) {
+        const key = fileKey(f);
+        if (!prevMap.has(key)) prevMap.set(key, f);
+      }
+
+      const merged = Array.from(prevMap.values());
+
+      // 上限を超えたら「先に入ってたもの優先」で後ろを切る
+      const limited = merged.slice(0, MAX_FILES);
+
+      // エラーメッセージ
+      if (merged.length > MAX_FILES) {
+        setErrorMsg(`画像は最大 ${MAX_FILES} 枚までです。先に追加された ${MAX_FILES} 枚のみ使用します。`);
+      }
+
+      return limited;
+    });
+
+    // 画像が変わったら結果はクリア
+    setResult(null);
+    setAllowOverage(false);
+  };
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selected = Array.from(e.target.files ?? []);
-    const limited = selected.slice(0, MAX_FILES);
 
-    setFiles(limited);
+    // 追加方式
+    appendFiles(selected);
+
+    // 同じファイルを選び直せるようにリセット
+    e.target.value = "";
+  };
+
+  const clearFiles = () => {
+    setFiles([]);
     setResult(null);
     setErrorMsg(null);
     setAllowOverage(false);
+  };
 
-    if (selected.length > MAX_FILES) {
-      setErrorMsg(`画像は最大 ${MAX_FILES} 枚までです。最初の ${MAX_FILES} 枚だけ使用します。`);
-    }
-
-    // 同じファイルを選び直せるようにリセット（地味に重要）
-    e.target.value = "";
+  const removeOne = (index: number) => {
+    setFiles((prev) => prev.filter((_, i) => i !== index));
+    setResult(null);
+    setAllowOverage(false);
   };
 
   const copyToClipboard = async (text: string | null | undefined) => {
@@ -361,6 +402,18 @@ export default function UploadForm() {
     color: "#e5e7eb",
     fontSize: 12,
     fontWeight: 700,
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+  };
+
+  const dangerBtn: React.CSSProperties = {
+    padding: "9px 12px",
+    borderRadius: 999,
+    border: "1px solid rgba(248,113,113,0.75)",
+    background: "rgba(127,29,29,0.25)",
+    color: "#fecaca",
+    fontSize: 12,
+    fontWeight: 800,
     cursor: "pointer",
     whiteSpace: "nowrap",
   };
@@ -691,22 +744,12 @@ export default function UploadForm() {
             {isMobile ? (
               <>
                 {/* hidden inputs */}
-                <input
-                  ref={pickerRef}
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  onChange={handleFileChange}
-                  style={{ display: "none" }}
-                />
-
+                <input ref={pickerRef} type="file" accept="image/*" multiple onChange={handleFileChange} style={{ display: "none" }} />
                 <input
                   ref={cameraRef}
                   type="file"
                   accept="image/*"
-                  // Androidでカメラを出しやすくする
                   capture={isAndroid ? "environment" : undefined}
-                  // ★ 連続撮影を狙う（端末/カメラアプリ依存）
                   multiple
                   onChange={handleFileChange}
                   style={{ display: "none" }}
@@ -714,15 +757,23 @@ export default function UploadForm() {
 
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                   <button type="button" onClick={() => pickerRef.current?.click()} style={ghostBtn}>
-                    写真を選択
+                    写真を選択（追加）
                   </button>
 
                   <button type="button" onClick={() => cameraRef.current?.click()} style={ghostBtn}>
-                    その場で撮影（連続OK）
+                    その場で撮影（追加）
                   </button>
+
+                  {files.length > 0 && (
+                    <button type="button" onClick={clearFiles} style={dangerBtn}>
+                      全削除
+                    </button>
+                  )}
                 </div>
 
                 <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 10, lineHeight: 1.6 }}>
+                  ・撮影/選択するたびに「画像が追加」されます（最大{MAX_FILES}枚）
+                  <br />
                   ・1枚あたり最大10MB・合計25MBまで（元画像の目安）
                   <br />
                   ・送信エラー回避のため、背景はなるべくトリミングしてください。
@@ -730,9 +781,18 @@ export default function UploadForm() {
               </>
             ) : (
               <>
-                {/* ▼ PCは従来通り */}
+                {/* ▼ PCは従来通り（追加方式） */}
                 <input type="file" accept="image/*" multiple onChange={handleFileChange} style={{ fontSize: 13, color: "#e5e7eb" }} />
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+                  {files.length > 0 && (
+                    <button type="button" onClick={clearFiles} style={dangerBtn}>
+                      全削除
+                    </button>
+                  )}
+                </div>
                 <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 8, lineHeight: 1.6 }}>
+                  ・選択するたびに「画像が追加」されます（最大{MAX_FILES}枚）
+                  <br />
                   ・1枚あたり最大10MB・合計25MBまで（元画像の目安）
                   <br />
                   ・送信エラー回避のため、背景はなるべくトリミングしてください。
@@ -742,13 +802,36 @@ export default function UploadForm() {
           </div>
 
           {files.length > 0 && (
-            <ul style={{ fontSize: 12, margin: "0 0 12px", paddingLeft: 18, color: "#e5e7eb" }}>
-              {files.map((f, i) => (
-                <li key={i}>
-                  {f.name}（{Math.round(f.size / 1024)} KB）
-                </li>
-              ))}
-            </ul>
+            <div style={{ margin: "0 0 12px" }}>
+              <ul style={{ fontSize: 12, margin: 0, paddingLeft: 18, color: "#e5e7eb" }}>
+                {files.map((f, i) => (
+                  <li key={`${f.name}-${f.size}-${f.lastModified}-${i}`} style={{ marginBottom: 6 }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                      <div>
+                        {f.name}（{Math.round(f.size / 1024)} KB）
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => removeOne(i)}
+                        style={{
+                          padding: "4px 10px",
+                          borderRadius: 999,
+                          border: "1px solid rgba(148,163,184,0.45)",
+                          background: "rgba(2,6,23,0.35)",
+                          color: "#e5e7eb",
+                          fontSize: 11,
+                          fontWeight: 700,
+                          cursor: "pointer",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        削除
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
 
           <button
