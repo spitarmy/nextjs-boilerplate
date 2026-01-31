@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../lib/supabase";
 
 type ListingMode = "flea" | "auction";
@@ -62,7 +62,7 @@ const MAX_FILES = 5;
 const MAX_ORIGINAL_SIZE_PER_FILE = 10 * 1024 * 1024; // 10MB/枚
 const MAX_ORIGINAL_TOTAL_SIZE = 25 * 1024 * 1024; // 合計25MB（元画像の目安）
 
-// ★ 軽量化
+// ★ 軽量化（圧縮は維持）
 const MAX_LONG_SIDE = 720;
 const JPEG_QUALITY = 0.65;
 
@@ -119,6 +119,7 @@ export default function UploadForm() {
   const [allowOverage, setAllowOverage] = useState(false);
 
   const [isMobile, setIsMobile] = useState(false);
+  const [isAndroid, setIsAndroid] = useState(false);
 
   // ★ 学習提供設定
   const [allowTraining, setAllowTraining] = useState(false);
@@ -135,6 +136,10 @@ export default function UploadForm() {
     certificate_text: "",
     notes: "",
   });
+
+  // ★ モバイルで「写真選択」「その場で撮影」を出すための hidden input
+  const pickerRef = useRef<HTMLInputElement | null>(null);
+  const cameraRef = useRef<HTMLInputElement | null>(null);
 
   const isFlea = listingMode === "flea";
   const isAuction = listingMode === "auction";
@@ -160,9 +165,14 @@ export default function UploadForm() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+
     const check = () => setIsMobile(window.innerWidth < 768);
     check();
     window.addEventListener("resize", check);
+
+    const ua = navigator.userAgent || "";
+    setIsAndroid(/Android/i.test(ua));
+
     return () => window.removeEventListener("resize", check);
   }, []);
 
@@ -220,6 +230,9 @@ export default function UploadForm() {
     if (selected.length > MAX_FILES) {
       setErrorMsg(`画像は最大 ${MAX_FILES} 枚までです。最初の ${MAX_FILES} 枚だけ使用します。`);
     }
+
+    // 同じファイルを選び直せるようにリセット（地味に重要）
+    e.target.value = "";
   };
 
   const copyToClipboard = async (text: string | null | undefined) => {
@@ -268,7 +281,9 @@ export default function UploadForm() {
         const dataUrl = await fileToCompressedDataUrl(file);
         totalDataBytes += estimateDataUrlBytes(dataUrl);
         if (totalDataBytes > MAX_TOTAL_DATAURL_BYTES) {
-          setErrorMsg("画像データが大きすぎて送信時にエラーになる可能性があります。画像を減らすか、不要背景をトリミングして再度お試しください。");
+          setErrorMsg(
+            "画像データが大きすぎて送信時にエラーになる可能性があります。画像を減らすか、不要背景をトリミングして再度お試しください。"
+          );
           setLoading(false);
           return;
         }
@@ -337,6 +352,18 @@ export default function UploadForm() {
   };
 
   const labelStyle: React.CSSProperties = { fontSize: 12, fontWeight: 700, color: "#e5e7eb", marginBottom: 6 };
+
+  const ghostBtn: React.CSSProperties = {
+    padding: "9px 12px",
+    borderRadius: 999,
+    border: "1px solid rgba(148,163,184,0.45)",
+    background: "rgba(2,6,23,0.35)",
+    color: "#e5e7eb",
+    fontSize: 12,
+    fontWeight: 700,
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+  };
 
   return (
     <div
@@ -660,12 +687,58 @@ export default function UploadForm() {
               backgroundColor: "rgba(15,23,42,0.96)",
             }}
           >
-            <input type="file" accept="image/*" multiple onChange={handleFileChange} style={{ fontSize: 13, color: "#e5e7eb" }} />
-            <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 8, lineHeight: 1.6 }}>
-              ・1枚あたり最大10MB・合計25MBまで（元画像の目安）
-              <br />
-              ・送信エラー回避のため、背景はなるべくトリミングしてください。
-            </div>
+            {/* ▼ モバイルは「写真を選択」「その場で撮影」を明示（Android対応） */}
+            {isMobile ? (
+              <>
+                {/* hidden inputs */}
+                <input
+                  ref={pickerRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={handleFileChange}
+                  style={{ display: "none" }}
+                />
+
+                <input
+                  ref={cameraRef}
+                  type="file"
+                  accept="image/*"
+                  // Androidでカメラを出しやすくする
+                  capture={isAndroid ? "environment" : undefined}
+                  // ★ 連続撮影を狙う（端末/カメラアプリ依存）
+                  multiple
+                  onChange={handleFileChange}
+                  style={{ display: "none" }}
+                />
+
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <button type="button" onClick={() => pickerRef.current?.click()} style={ghostBtn}>
+                    写真を選択
+                  </button>
+
+                  <button type="button" onClick={() => cameraRef.current?.click()} style={ghostBtn}>
+                    その場で撮影（連続OK）
+                  </button>
+                </div>
+
+                <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 10, lineHeight: 1.6 }}>
+                  ・1枚あたり最大10MB・合計25MBまで（元画像の目安）
+                  <br />
+                  ・送信エラー回避のため、背景はなるべくトリミングしてください。
+                </div>
+              </>
+            ) : (
+              <>
+                {/* ▼ PCは従来通り */}
+                <input type="file" accept="image/*" multiple onChange={handleFileChange} style={{ fontSize: 13, color: "#e5e7eb" }} />
+                <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 8, lineHeight: 1.6 }}>
+                  ・1枚あたり最大10MB・合計25MBまで（元画像の目安）
+                  <br />
+                  ・送信エラー回避のため、背景はなるべくトリミングしてください。
+                </div>
+              </>
+            )}
           </div>
 
           {files.length > 0 && (
