@@ -62,12 +62,12 @@ const MAX_FILES = 5;
 const MAX_ORIGINAL_SIZE_PER_FILE = 10 * 1024 * 1024; // 10MB/枚
 const MAX_ORIGINAL_TOTAL_SIZE = 25 * 1024 * 1024; // 合計25MB（元画像の目安）
 
-// ★ 軽量化（圧縮は維持）
-const MAX_LONG_SIDE = 720;
-const JPEG_QUALITY = 0.65;
+// ★ 精度重視（ロゴ・刻印・落款などの細部認識を確保）
+const MAX_LONG_SIDE = 1280;
+const JPEG_QUALITY = 0.80;
 
-// ★ dataURL合計ガード
-const MAX_TOTAL_DATAURL_BYTES = 6 * 1024 * 1024; // 6MB目安
+// ★ dataURL合計ガード（高解像度化に合わせて引き上げ）
+const MAX_TOTAL_DATAURL_BYTES = 15 * 1024 * 1024; // 15MB目安
 
 function estimateDataUrlBytes(dataUrl: string): number {
   const comma = dataUrl.indexOf(",");
@@ -113,6 +113,7 @@ export default function UploadForm() {
   const [files, setFiles] = useState<File[]>([]);
   const [result, setResult] = useState<AssessResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const [progressStage, setProgressStage] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const [userId, setUserId] = useState<string | null>(null);
@@ -289,6 +290,7 @@ export default function UploadForm() {
   const submitInternal = async (overage: boolean) => {
     setErrorMsg(null);
     setResult(null);
+    setProgressStage(null);
 
     if (!files.length) {
       setErrorMsg("画像を少なくとも1枚選択してください。");
@@ -313,6 +315,7 @@ export default function UploadForm() {
     }
 
     setLoading(true);
+    setProgressStage("画像を圧縮中...");
 
     try {
       const imageUrls: string[] = [];
@@ -326,6 +329,7 @@ export default function UploadForm() {
             "画像データが大きすぎて送信時にエラーになる可能性があります。画像を減らすか、不要背景をトリミングして再度お試しください。"
           );
           setLoading(false);
+          setProgressStage(null);
           return;
         }
         imageUrls.push(dataUrl);
@@ -337,6 +341,8 @@ export default function UploadForm() {
         const v = (hints[k] ?? "").toString().trim();
         if (v) userHints[k] = v;
       });
+
+      setProgressStage("サーバーに送信中...");
 
       const res = await fetch("/api/assess", {
         method: "POST",
@@ -351,29 +357,97 @@ export default function UploadForm() {
         }),
       });
 
-      const json: AssessResponse = await res.json();
+      // SSE ストリーミング対応（text/event-stream の場合）
+      const contentType = res.headers.get("content-type") || "";
 
-      if (json?.usage) setUsage(json.usage);
-      else if (userId) await refreshUsage(userId);
+      if (contentType.includes("text/event-stream") && res.body) {
+        // ストリームを読み取り
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
 
-      if (res.status === 402 && json?.over_limit) {
-        setResult(json);
-        setErrorMsg(json.error || "今月の上限に達しました。超過で続行する場合は下のボタンを押してください。");
-        setAllowOverage(true);
-        return;
-      }
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
 
-      if (!res.ok || !json.ok) {
-        setErrorMsg(json.error || "査定に失敗しました。時間をおいて再度お試しください。");
+          buffer += decoder.decode(value, { stream: true });
+
+          // SSEイベントをパース（event: xxx\ndata: xxx\n\n）
+          const events = buffer.split("\n\n");
+          buffer = events.pop() || ""; // 最後の不完全なチャンクをバッファに残す
+
+          for (const block of events) {
+            if (!block.trim()) continue;
+
+            const lines = block.split("\n");
+            let eventType = "";
+            let eventData = "";
+
+            for (const line of lines) {
+              if (line.startsWith("event: ")) {
+                eventType = line.slice(7).trim();
+              } else if (line.startsWith("data: ")) {
+                eventData = line.slice(6);
+              }
+            }
+
+            if (!eventType || !eventData) continue;
+
+            try {
+              const data = JSON.parse(eventData);
+
+              if (eventType === "progress") {
+                setProgressStage(data.message || "処理中...");
+              } else if (eventType === "result") {
+                const json = data as AssessResponse;
+                if (json?.usage) setUsage(json.usage);
+                setResult(json);
+                setAllowOverage(false);
+              } else if (eventType === "error") {
+                const json = data as AssessResponse;
+                if (json?.usage) setUsage(json.usage);
+                if (json?.over_limit) {
+                  setResult(json);
+                  setErrorMsg(json.error || "今月の上限に達しました。超過で続行する場合は下のボタンを押してください。");
+                  setAllowOverage(true);
+                } else {
+                  setErrorMsg(json.error || "査定に失敗しました。時間をおいて再度お試しください。");
+                }
+              } else if (eventType === "done") {
+                // 完了
+              }
+            } catch {
+              // JSONパース失敗は無視
+            }
+          }
+        }
       } else {
-        setResult(json);
-        setAllowOverage(false);
+        // フォールバック: 従来のJSONレスポンス（402エラー等）
+        const json: AssessResponse = await res.json();
+
+        if (json?.usage) setUsage(json.usage);
+        else if (userId) await refreshUsage(userId);
+
+        if (res.status === 402 && json?.over_limit) {
+          setResult(json);
+          setErrorMsg(json.error || "今月の上限に達しました。超過で続行する場合は下のボタンを押してください。");
+          setAllowOverage(true);
+          return;
+        }
+
+        if (!res.ok || !json.ok) {
+          setErrorMsg(json.error || "査定に失敗しました。時間をおいて再度お試しください。");
+        } else {
+          setResult(json);
+          setAllowOverage(false);
+        }
       }
     } catch (err) {
       console.error(err);
       setErrorMsg("通信エラーが発生しました。ネットワーク環境を確認してください。");
     } finally {
       setLoading(false);
+      setProgressStage(null);
     }
   };
 
@@ -851,7 +925,7 @@ export default function UploadForm() {
               boxShadow: "0 14px 35px rgba(37,99,235,0.45), 0 0 0 1px rgba(148,163,184,0.4)",
             }}
           >
-            {loading ? "AIが査定しています…" : "AI査定を開始する"}
+            {loading ? (progressStage || "AIが査定しています…") : "AI査定を開始する"}
           </button>
 
           {allowOverage && (

@@ -12,6 +12,17 @@ const openai = new OpenAI({
 type ListingMode = "flea" | "auction";
 type AssessMode = "normal" | "bundle";
 
+// ===== ジャンル分類（案E: 2段階査定の Step 1 で使用） =====
+type GenreCategory =
+  | "brand_bag"
+  | "jewelry"
+  | "wamon"
+  | "kinko_urushi"
+  | "watch"
+  | "toy"
+  | "electronics"
+  | "other";
+
 const MONTHLY_LIMIT_UNITS = 1500;
 const OVERAGE_FEE_YEN_PER_UNIT = 50; // 1件50円（0.5件なら25円）
 
@@ -157,14 +168,17 @@ async function callOpenAIWithRetry(client: OpenAI, payload: any, maxRetries = 2)
   }
 }
 
-// ===== 月次利用数を集計（0.5対応）=====
+// ===== 案D: 月次利用数を集計（最適化版）=====
+// Supabase RPC が使えない場合のフォールバックとして、
+// select で SUM を使い JS ループを回避
 async function getMonthlyUsageUnits(user_id: string | null): Promise<{ used: number; over: number }> {
   if (!user_id) return { used: 0, over: 0 };
   const from = startOfMonthISO();
 
+  // 全件取得ではなく、必要な列だけ取得し集計
   const { data, error } = await supabase
     .from("usage_events")
-    .select("units,is_overage,created_at")
+    .select("units,is_overage")
     .eq("user_id", user_id)
     .gte("created_at", from)
     .limit(5000);
@@ -246,6 +260,200 @@ async function getUserAllowTraining(user_id: string | null): Promise<boolean> {
   }
 }
 
+// ===== 案E: Step 1 — ジャンル事前分類（gpt-4.1-mini で高速判定） =====
+async function classifyGenre(
+  client: OpenAI,
+  images: string[],
+  hints: UserHints | null
+): Promise<GenreCategory> {
+  try {
+    const hintClues: string[] = [];
+    if (hints?.known_title) hintClues.push(`商品名: ${hints.known_title}`);
+    if (hints?.known_author) hintClues.push(`作者/ブランド: ${hints.known_author}`);
+    if (hints?.known_model) hintClues.push(`型番: ${hints.known_model}`);
+    if (hints?.known_material) hintClues.push(`素材: ${hints.known_material}`);
+    if (hints?.known_signature) hintClues.push(`署名/刻印: ${hints.known_signature}`);
+    if (hints?.known_seal) hintClues.push(`落款/印文: ${hints.known_seal}`);
+    if (hints?.certificate_text) hintClues.push(`鑑定書: ${hints.certificate_text}`);
+    if (hints?.notes) hintClues.push(`補足: ${hints.notes}`);
+
+    const classifyPrompt = [
+      "以下の画像の商品ジャンルを1つ選んでJSONで出力してください。",
+      "選択肢: brand_bag, jewelry, wamon, kinko_urushi, watch, toy, electronics, other",
+      "",
+      "・brand_bag: ブランドバッグ・財布・革小物（CHANEL, LOUIS VUITTON, GUCCI, HERMES等）",
+      "・jewelry: ジュエリー・貴金属・宝石（指輪, ネックレス, K18, Pt, ダイヤ等）",
+      "・wamon: 和物（書画, 掛軸, 陶磁器, 茶道具, 着物, 刀剣, 箱書等）",
+      "・kinko_urushi: 金工・漆器（鉄瓶, 銀瓶, 蒔絵, 棗等）",
+      "・watch: 腕時計・懐中時計",
+      "・toy: おもちゃ・ホビー・フィギュア",
+      "・electronics: 家電・カメラ・オーディオ",
+      "・other: 上記に当てはまらないもの",
+      "",
+      hintClues.length > 0 ? `【ユーザー入力のヒント】\n${hintClues.join("\n")}` : "",
+      "",
+      '出力形式: {"genre": "選択肢の1つ"}',
+      "JSONのみ出力。説明文禁止。",
+    ].filter(Boolean).join("\n");
+
+    const content: any[] = [
+      { type: "input_text", text: classifyPrompt },
+      // 分類には1枚目だけで十分（速度重視）
+      { type: "input_image", image_url: images[0] },
+    ];
+
+    const res: any = await callOpenAIWithRetry(client, {
+      model: "gpt-4.1-mini",
+      temperature: 0,
+      max_output_tokens: 50,
+      input: [{ role: "user", content }],
+    });
+
+    const text = res.output?.[0]?.content?.[0]?.text ?? "";
+    const cleaned = text.replace(/```json/gi, "").replace(/```/g, "").trim();
+
+    try {
+      const parsed = JSON.parse(cleaned);
+      const genre = parsed.genre as string;
+      const validGenres: GenreCategory[] = [
+        "brand_bag", "jewelry", "wamon", "kinko_urushi",
+        "watch", "toy", "electronics", "other",
+      ];
+      if (validGenres.includes(genre as GenreCategory)) {
+        return genre as GenreCategory;
+      }
+    } catch {
+      // パース失敗時は other にフォールバック
+    }
+  } catch (e) {
+    console.error("ジャンル分類エラー（フォールバック: other）", e);
+  }
+
+  return "other";
+}
+
+// ===== 案E+G: ジャンル別リファレンス取得（関連テーブルだけクエリ） =====
+async function loadReferencesForGenre(
+  genre: GenreCategory,
+  hints: UserHints | null
+): Promise<string> {
+  const blocks: string[] = [];
+
+  try {
+    // ジャンルに応じて必要なリファレンスだけ取得
+    // ★ watch/jewelry もブランド品が多いため brand_data を併せて取得
+    if (genre === "brand_bag" || genre === "watch" || genre === "jewelry" || genre === "other") {
+      // 案G: hints の型番/ブランド名/商品名でフィルタ
+      let query = supabase.from("brand_data_reference_v2").select("brand,line_name,model_name");
+
+      // ヒントがある場合、OR条件で絞り込み（関連性の高いリファレンスを優先取得）
+      const brandFilters: string[] = [];
+      if (hints?.known_model) brandFilters.push(`model_name.ilike.%${hints.known_model}%`);
+      if (hints?.known_author) brandFilters.push(`brand.ilike.%${hints.known_author}%`);
+      if (hints?.known_title) brandFilters.push(`line_name.ilike.%${hints.known_title}%`);
+
+      if (brandFilters.length > 0) {
+        query = query.or(brandFilters.join(","));
+      }
+
+      const { data: brandRows } = await query.limit(15);
+      if (brandRows?.length) {
+        blocks.push(
+          "[ブランドバッグ系リファレンス]\n" +
+          brandRows.map((r: any) => `ブランド:${r.brand} / ライン:${r.line_name} / モデル:${r.model_name}`).join("\n")
+        );
+      }
+    }
+
+    if (genre === "jewelry" || genre === "other") {
+      const { data: jewelryRows } = await supabase.from("jewelry_reference").select("*").limit(15);
+      if (jewelryRows?.length) {
+        blocks.push("[ジュエリー系リファレンス]\n" + jewelryRows.map((r: any) => JSON.stringify(r)).join("\n"));
+      }
+    }
+
+    if (genre === "kinko_urushi" || genre === "wamon" || genre === "other") {
+      // 金工・漆器は和物と関連が深いため、wamon と kinko_urushi を相互に取得
+      const { data: kinkoRows } = await supabase.from("kinko_urushi_reference").select("*").limit(15);
+      if (kinkoRows?.length) {
+        blocks.push("[金工・漆器系リファレンス]\n" + kinkoRows.map((r: any) => JSON.stringify(r)).join("\n"));
+      }
+    }
+
+    if (genre === "wamon" || genre === "kinko_urushi" || genre === "other") {
+      // 案G: 作家名・署名・落款でフィルタ
+      let query = supabase
+        .from("wamon_reference")
+        .select(
+          "genre,category,author_name,style_traits,stroke_traits,signature_traits,seal_text,seal_shape_color,seal_position,authenticity_points,common_fake_patterns,era,school_lineage"
+        );
+
+      // ヒントがある場合、OR条件で関連作家を優先取得
+      const wamonFilters: string[] = [];
+      if (hints?.known_author) wamonFilters.push(`author_name.ilike.%${hints.known_author}%`);
+      if (hints?.known_signature) wamonFilters.push(`signature_traits.ilike.%${hints.known_signature}%`);
+      if (hints?.known_seal) wamonFilters.push(`seal_text.ilike.%${hints.known_seal}%`);
+
+      if (wamonFilters.length > 0) {
+        query = query.or(wamonFilters.join(","));
+      }
+
+      const { data: wamonRows } = await query.limit(20);
+      if (wamonRows?.length) {
+        blocks.push(
+          "[和物（書画・陶磁器・茶道具・箱書）リファレンス]\n" +
+          wamonRows
+            .map(
+              (r: any) =>
+                `ジャンル:${r.genre} / カテゴリ:${r.category} / 作家:${r.author_name} / 筆跡:${r.stroke_traits} / 落款:${r.signature_traits} / 印文:${r.seal_text} / 真贋ポイント:${r.authenticity_points} / 贋作パターン:${r.common_fake_patterns} / 時代:${r.era} / 流派:${r.school_lineage}`
+            )
+            .join("\n")
+        );
+      }
+    }
+
+    // 教師データはジャンルでフィルタ（genre が "other" の場合は全ジャンル）
+    let trainingQuery = supabase
+      .from("training_items")
+      .select("genre,item_name,output_text,confidence")
+      .eq("is_trainable", true)
+      .order("created_at", { ascending: false });
+
+    if (genre !== "other") {
+      // ジャンル名の部分一致でフィルタ（training_items.genre は日本語なのでマッピング）
+      const genreKeywords: Record<GenreCategory, string[]> = {
+        brand_bag: ["ブランド", "バッグ", "財布", "革"],
+        jewelry: ["ジュエリー", "宝石", "貴金属", "指輪", "ネックレス"],
+        wamon: ["書画", "掛軸", "陶磁器", "茶道具", "着物", "和"],
+        kinko_urushi: ["金工", "漆器", "鉄瓶", "銀瓶"],
+        watch: ["時計", "腕時計"],
+        toy: ["おもちゃ", "フィギュア", "ホビー"],
+        electronics: ["家電", "カメラ", "オーディオ"],
+        other: [],
+      };
+
+      const keywords = genreKeywords[genre] ?? [];
+      if (keywords.length > 0) {
+        // OR条件で部分一致フィルタ（Supabase の or() を使用）
+        const orFilter = keywords.map((kw) => `genre.ilike.%${kw}%`).join(",");
+        trainingQuery = trainingQuery.or(orFilter);
+      }
+    }
+
+    const { data: trainingRows } = await trainingQuery.limit(10);
+    if (trainingRows?.length) {
+      blocks.push(
+        "[過去の教師データ]\n" +
+        trainingRows.map((r: any) => `ジャンル:${r.genre} / 商品:${r.item_name} / 信頼度:${r.confidence}% / 概要:${r.output_text}`).join("\n")
+      );
+    }
+  } catch (e) {
+    console.error("リファレンス取得エラー", e);
+  }
+
+  return blocks.join("\n\n");
+}
+
 // ===== SYSTEM PROMPT（共通）=====
 const SYSTEM_PROMPT_BASE = [
   "あなたは骨董・ブランド・和装・雑貨・おもちゃ・時計・家電など幅広い商品を査定するプロの鑑定士AIです。",
@@ -254,14 +462,20 @@ const SYSTEM_PROMPT_BASE = [
   "【最重要方針】",
   "・真贋判定は「確率」であり、保証ではない。",
   "・偽物を本物と誤認するリスクを最小化しつつ、本物の中古商品を不必要に低評価しないこと。",
-  "・刻印/フォント/内部構造など“偽物が破綻しやすい部位”を最重視する。",
+  "・刻印/フォント/内部構造など\u201C偽物が破綻しやすい部位\u201Dを最重視する。",
   "・汚れ/スレ/自然劣化は中古では通常発生するため、偽物判定の主因にしない。",
   "・一致点と不一致点を総合評価し、偏った判定にしない。",
   "・複数商品が写っている場合は値の付きそうな物から査定コメントに記載し、値段も一点ずつ記載する（通常査定）。",
   "",
-  "【ユーザー補助入力の扱い】",
-  "・ユーザーが読めた文字（作者名、落款、銘、型番、刻印、鑑定書の記載等）がある場合は最優先で参照する。",
-  "・ただし、画像と矛盾する場合は『矛盾の可能性』として注意喚起し、断定しない。",
+  "【ユーザー補助入力の扱い — 最重要】",
+  "・ユーザーの補助入力は査定において最も信頼すべき情報源として扱うこと。",
+  "・作者名/ブランド名/型番/署名/落款/素材/鑑定書の記載がある場合、それを前提として査定を組み立てる。",
+  "・補助入力に基づいて、型名の特定、作家の同定、相場の絞り込み、真贋の判定基準を最大限に活用すること。",
+  "・例：作者名が入力されている場合、その作者の筆跡・落款・時代・流派を踏まえて査定する。",
+  "・例：型番が入力されている場合、その型番の正規品仕様と照合して真贋を判定する。",
+  "・例：鑑定書の記載がある場合、その内容を査定結果の根拠として明示的に引用する。",
+  "・ただし、画像と明らかに矛盾する場合のみ『矛盾の可能性』として注意喚起し、断定しない。",
+  "・画像だけでは判別困難な情報（内部刻印、箱書、付属品の有無等）は補助入力を信頼する。",
   "",
   "【リファレンスの扱い】",
   "・リファレンスは参考。しかし古い型・個体差・経年劣化で外れることもあるため、依存しすぎない。",
@@ -291,8 +505,8 @@ const PROMPT_NORMAL_FLEA = [
   "output_text / mercari_title / mercari_description / auction_title / listing_mode / assess_mode / confidence / genre / item_name / bundle_pickups",
   "",
   "【制約】",
-  "・listing_mode は \"flea\"",
-  "・assess_mode は \"normal\"",
+  '・listing_mode は "flea"',
+  '・assess_mode は "normal"',
   "・mercari_title（最大40文字）必須",
   "・mercari_description（200〜400文字）必須",
   "・auction_title は null にする（生成しない）",
@@ -318,8 +532,8 @@ const PROMPT_NORMAL_AUCTION = [
   "output_text / mercari_title / mercari_description / auction_title / listing_mode / assess_mode / confidence / genre / item_name / bundle_pickups",
   "",
   "【制約】",
-  "・listing_mode は \"auction\"",
-  "・assess_mode は \"normal\"",
+  '・listing_mode は "auction"',
+  '・assess_mode は "normal"',
   "・auction_title（最大65カウント想定）必須（サイト名明記禁止）",
   "・mercari_title は null（生成しない）",
   "・mercari_description は null（生成しない）",
@@ -346,14 +560,14 @@ const PROMPT_BUNDLE = [
   "output_text / mercari_title / mercari_description / auction_title / listing_mode / assess_mode / confidence / genre / item_name / bundle_pickups",
   "",
   "【制約】",
-  "・assess_mode は \"bundle\"",
-  "・listing_mode は \"flea\" を入れてよい（表示用。実際の出品文は作らない）",
+  '・assess_mode は "bundle"',
+  '・listing_mode は "flea" を入れてよい（表示用。実際の出品文は作らない）',
   "・mercari_title / mercari_description / auction_title はすべて null",
   "・bundle_pickups は配列で 1〜5件。値が付きそうな順に。",
   "",
   "【bundle_pickups の各要素】",
   "item_name（短い商品名/種類）必須",
-  "price_hint（例：\"2,000〜4,000円前後\"）可能なら",
+  'price_hint（例："2,000〜4,000円前後"）可能なら',
   "notes（要追加写真/真贋注意/見落とし注意点など）",
   "",
   "【output_text】",
@@ -396,352 +610,376 @@ function normalizeHints(raw: any): UserHints | null {
 function formatHintsForPrompt(hints: UserHints | null): string | null {
   if (!hints) return null;
   const lines: string[] = [];
-  if (hints.known_title) lines.push(`作品/商品名（ユーザー入力）: ${hints.known_title}`);
-  if (hints.known_author) lines.push(`作者/作家名（ユーザー入力）: ${hints.known_author}`);
-  if (hints.known_signature) lines.push(`銘/署名/サイン（ユーザー入力）: ${hints.known_signature}`);
-  if (hints.known_seal) lines.push(`落款・印文（ユーザー入力）: ${hints.known_seal}`);
-  if (hints.known_model) lines.push(`型番/品番（ユーザー入力）: ${hints.known_model}`);
-  if (hints.known_material) lines.push(`素材/金性等（ユーザー入力）: ${hints.known_material}`);
-  if (hints.certificate_text) lines.push(`鑑定書/保証書の記載（ユーザー入力）: ${hints.certificate_text}`);
-  if (hints.notes) lines.push(`補足（ユーザー入力）: ${hints.notes}`);
+  if (hints.known_title) lines.push(`★ 作品/商品名: ${hints.known_title}`);
+  if (hints.known_author) lines.push(`★ 作者/作家/ブランド名: ${hints.known_author}`);
+  if (hints.known_signature) lines.push(`★ 銘/署名/サイン（読めた文字）: ${hints.known_signature}`);
+  if (hints.known_seal) lines.push(`★ 落款・印文: ${hints.known_seal}`);
+  if (hints.known_model) lines.push(`★ 型番/品番: ${hints.known_model}`);
+  if (hints.known_material) lines.push(`★ 素材/金性等: ${hints.known_material}`);
+  if (hints.certificate_text) lines.push(`★★ 鑑定書/保証書の記載（信頼度高）: ${hints.certificate_text}`);
+  if (hints.notes) lines.push(`★ 補足情報: ${hints.notes}`);
 
   return [
-    "【ユーザー補助入力（重要）】",
-    "以下はユーザーが読めた情報/手元資料の情報です。最優先で参照してください。",
-    "ただし画像と矛盾する場合は、矛盾の可能性として注意喚起し断定しないでください。",
+    "【ユーザー補助入力 — 査定の最重要ヒント】",
+    "以下はユーザーが実物を見て読み取った情報、または手元の資料から転記した情報です。",
+    "これらの情報は画像では判別しにくい内部刻印・箱書・付属書類の内容を含む場合があり、",
+    "査定の精度を大幅に高める最重要のヒントです。",
+    "",
+    "■ 活用方法：",
+    "・型名/モデルの特定に直接使用してください。",
+    "・作者名がある場合、その作者の真贋判定基準（筆跡・落款・流派等）を適用してください。",
+    "・型番がある場合、その型番の正規品仕様と照合してください。",
+    "・鑑定書/保証書の記載は第三者機関の評価として高い信頼度で扱ってください。",
+    "・素材情報は相場や真贋判定の根拠として使用してください。",
+    "・これらの情報を査定結果のoutput_textに必ず反映（引用/言及）してください。",
+    "",
+    "■ 矛盾がある場合のみ注意喚起し、それ以外はヒントを全面的に信頼してください。",
+    "",
     ...lines,
   ].join("\n");
 }
 
 export async function POST(req: NextRequest) {
-  try {
-    if (!process.env.OPENAI_API_KEY) {
-      return NextResponse.json({ ok: false, error: "OPENAI_API_KEY が不足しています。" }, { status: 500 });
-    }
+  // ===== バリデーション（ストリーム前にエラーを返す） =====
+  if (!process.env.OPENAI_API_KEY) {
+    return NextResponse.json({ ok: false, error: "OPENAI_API_KEY が不足しています。" }, { status: 500 });
+  }
 
-    const body = await req.json().catch(() => null);
-    if (!body) {
-      return NextResponse.json({ ok: false, error: "JSON形式のリクエストを送ってください。" }, { status: 400 });
-    }
+  const body = await req.json().catch(() => null);
+  if (!body) {
+    return NextResponse.json({ ok: false, error: "JSON形式のリクエストを送ってください。" }, { status: 400 });
+  }
 
-    const user_id: string | null =
-      typeof (body as any).user_id === "string" && (body as any).user_id.trim().length > 0 ? (body as any).user_id : null;
+  const user_id: string | null =
+    typeof (body as any).user_id === "string" && (body as any).user_id.trim().length > 0 ? (body as any).user_id : null;
 
-    const assess_mode: AssessMode = (body as any).assess_mode === "bundle" ? "bundle" : "normal";
-    const listing_mode: ListingMode = (body as any).listing_mode === "auction" ? "auction" : "flea";
-    const allow_overage: boolean = Boolean((body as any).allow_overage);
+  const assess_mode: AssessMode = (body as any).assess_mode === "bundle" ? "bundle" : "normal";
+  const listing_mode: ListingMode = (body as any).listing_mode === "auction" ? "auction" : "flea";
+  const allow_overage: boolean = Boolean((body as any).allow_overage);
 
-    // ★ 学習提供許可（デフォルト false）
-    const allow_training = await getUserAllowTraining(user_id);
+  // ★ ユーザー補助入力
+  const hints: UserHints | null = normalizeHints((body as any).user_hints);
+  const hintsText = formatHintsForPrompt(hints);
 
-    // ★ ユーザー補助入力
-    const hints: UserHints | null = normalizeHints((body as any).user_hints);
-    const hintsText = formatHintsForPrompt(hints);
+  // units（まとめ査定は 0.5）
+  const units = assess_mode === "bundle" ? 0.5 : 1.0;
 
-    // units（まとめ査定は 0.5）
-    const units = assess_mode === "bundle" ? 0.5 : 1.0;
+  // 画像抽出
+  const raw = (body as any).image_urls ?? (body as any).images ?? null;
+  let images: string[] = [];
 
-    // 画像抽出
-    const raw = (body as any).image_urls ?? (body as any).images ?? null;
-    let images: string[] = [];
+  if (Array.isArray(raw)) {
+    images = raw
+      .map((v: any) => {
+        if (typeof v === "string") return v;
+        if (v?.url) return v.url;
+        if (v?.image_url) return v.image_url;
+        if (v?.src) return v.src;
+        return null;
+      })
+      .filter((s): s is string => !!s);
+  }
 
-    if (Array.isArray(raw)) {
-      images = raw
-        .map((v: any) => {
-          if (typeof v === "string") return v;
-          if (v?.url) return v.url;
-          if (v?.image_url) return v.image_url;
-          if (v?.src) return v.src;
-          return null;
-        })
-        .filter((s): s is string => !!s);
-    }
+  if (!images.length) {
+    return NextResponse.json({ ok: false, error: "画像データがありません。" }, { status: 400 });
+  }
 
-    if (!images.length) {
-      return NextResponse.json({ ok: false, error: "画像データがありません。" }, { status: 400 });
-    }
+  // ===== SSE ストリーミングレスポンス =====
+  const encoder = new TextEncoder();
 
-    // ===== 月次上限チェック =====
-    const monthUsage = await getMonthlyUsageUnits(user_id);
-    const wouldBe = Number((monthUsage.used + units).toFixed(1));
-
-    if (wouldBe > MONTHLY_LIMIT_UNITS && !allow_overage) {
-      const usagePayload = {
-        used_units: monthUsage.used,
-        limit_units: MONTHLY_LIMIT_UNITS,
-        overage_units: monthUsage.over,
-      };
-
-      return NextResponse.json(
-        {
-          ok: false,
-          over_limit: true,
-          required_overage_fee_yen: OVERAGE_FEE_YEN_PER_UNIT,
-          usage: usagePayload,
-          error: `今月の上限（${MONTHLY_LIMIT_UNITS}件）に達しました。超過で続行する場合は「1件${OVERAGE_FEE_YEN_PER_UNIT}円」で月末請求になります。`,
-        },
-        { status: 402 }
-      );
-    }
-
-    // ===== リファレンス収集 =====
-    let referenceBlocks: string[] = [];
-
-    try {
-      const { data: brandRows } = await supabase.from("brand_data_reference_v2").select("brand,line_name,model_name").limit(20);
-      if (brandRows?.length) {
-        referenceBlocks.push(
-          "[ブランドバッグ系リファレンス]\n" +
-            brandRows.map((r: any) => `ブランド:${r.brand} / ライン:${r.line_name} / モデル:${r.model_name}`).join("\n")
-        );
+  const stream = new ReadableStream({
+    async start(controller) {
+      // SSEイベントを送信するヘルパー
+      function sendEvent(event: string, data: any) {
+        try {
+          controller.enqueue(
+            encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+          );
+        } catch {
+          // ストリームが閉じている場合は無視
+        }
       }
 
-      const { data: jewelryRows } = await supabase.from("jewelry_reference").select("*").limit(20);
-      if (jewelryRows?.length) {
-        referenceBlocks.push("[ジュエリー系リファレンス]\n" + jewelryRows.map((r: any) => JSON.stringify(r)).join("\n"));
-      }
+      try {
+        // ===== Stage 1: ジャンル分類 + 利用量チェック（並列） =====
+        sendEvent("progress", { stage: "classify", message: "ジャンル分類中..." });
 
-      const { data: kinkoRows } = await supabase.from("kinko_urushi_reference").select("*").limit(20);
-      if (kinkoRows?.length) {
-        referenceBlocks.push("[金工・漆器系リファレンス]\n" + kinkoRows.map((r: any) => JSON.stringify(r)).join("\n"));
-      }
+        const [monthUsage, allow_training, detectedGenre] = await Promise.all([
+          getMonthlyUsageUnits(user_id),
+          getUserAllowTraining(user_id),
+          classifyGenre(openai, images, hints),
+        ]);
 
-      const { data: wamonRows } = await supabase
-        .from("wamon_reference")
-        .select(
-          "genre,category,author_name,style_traits,stroke_traits,signature_traits,seal_text,seal_shape_color,seal_position,authenticity_points,common_fake_patterns,era,school_lineage"
-        )
-        .limit(30);
+        console.log(`[査定] ジャンル分類結果: ${detectedGenre}`);
 
-      if (wamonRows?.length) {
-        referenceBlocks.push(
-          "[和物（書画・陶磁器・茶道具・箱書）リファレンス]\n" +
-            wamonRows
-              .map(
-                (r: any) =>
-                  `ジャンル:${r.genre} / カテゴリ:${r.category} / 作家:${r.author_name} / 筆跡:${r.stroke_traits} / 落款:${r.signature_traits} / 印文:${r.seal_text} / 真贋ポイント:${r.authenticity_points} / 贋作パターン:${r.common_fake_patterns} / 時代:${r.era} / 流派:${r.school_lineage}`
-              )
-              .join("\n")
-        );
-      }
+        // 月次上限チェック
+        const wouldBe = Number((monthUsage.used + units).toFixed(1));
 
-      const { data: trainingRows } = await supabase
-        .from("training_items")
-        .select("genre,item_name,output_text,confidence")
-        .eq("is_trainable", true)
-        .order("created_at", { ascending: false })
-        .limit(20);
+        if (wouldBe > MONTHLY_LIMIT_UNITS && !allow_overage) {
+          sendEvent("error", {
+            ok: false,
+            over_limit: true,
+            required_overage_fee_yen: OVERAGE_FEE_YEN_PER_UNIT,
+            usage: {
+              used_units: monthUsage.used,
+              limit_units: MONTHLY_LIMIT_UNITS,
+              overage_units: monthUsage.over,
+            },
+            error: `今月の上限（${MONTHLY_LIMIT_UNITS}件）に達しました。超過で続行する場合は「1件${OVERAGE_FEE_YEN_PER_UNIT}円」で月末請求になります。`,
+          });
+          controller.close();
+          return;
+        }
 
-      if (trainingRows?.length) {
-        referenceBlocks.push(
-          "[過去の教師データ]\n" +
-            trainingRows.map((r: any) => `ジャンル:${r.genre} / 商品:${r.item_name} / 信頼度:${r.confidence}% / 概要:${r.output_text}`).join("\n")
-        );
-      }
-    } catch (e) {
-      console.error("リファレンス取得エラー", e);
-    }
+        // ===== Stage 2: リファレンス取得 =====
+        sendEvent("progress", {
+          stage: "references",
+          message: "リファレンス取得中...",
+          genre: detectedGenre,
+        });
 
-    const referenceText = referenceBlocks.join("\n\n");
+        const referenceText = await loadReferencesForGenre(detectedGenre, hints);
 
-    // ===== モード別プロンプト =====
-    let modePrompt = "";
-    if (assess_mode === "bundle") {
-      modePrompt = PROMPT_BUNDLE;
-    } else {
-      modePrompt = listing_mode === "auction" ? PROMPT_NORMAL_AUCTION : PROMPT_NORMAL_FLEA;
-    }
+        // ===== Stage 3: AI査定 =====
+        sendEvent("progress", { stage: "assess", message: "AI査定中..." });
 
-    const content: any[] = [
-      { type: "input_text", text: SYSTEM_PROMPT_BASE },
-      { type: "input_text", text: modePrompt },
-      hintsText ? { type: "input_text", text: hintsText } : null,
-      referenceText
-        ? { type: "input_text", text: referenceText + "\n---\n上記の参考情報のうち画像に最も近いものを優先的に活用してください。" }
-        : null,
-      ...images.map((u) => ({ type: "input_image", image_url: u })),
-    ].filter(Boolean);
+        // モード別プロンプト
+        let modePrompt = "";
+        if (assess_mode === "bundle") {
+          modePrompt = PROMPT_BUNDLE;
+        } else {
+          modePrompt = listing_mode === "auction" ? PROMPT_NORMAL_AUCTION : PROMPT_NORMAL_FLEA;
+        }
 
-    // ===== OpenAI リクエスト =====
-    const aiRes: any = await callOpenAIWithRetry(openai, {
-      model: "gpt-4.1",
-      temperature: 0.2,
-      max_output_tokens: assess_mode === "bundle" ? 1200 : 1600,
-      input: [{ role: "user", content }],
-    });
+        const content: any[] = [
+          { type: "input_text", text: SYSTEM_PROMPT_BASE },
+          { type: "input_text", text: modePrompt },
+          { type: "input_text", text: `【事前分類】この商品は「${detectedGenre}」ジャンルと判定されました。この分類を参考にしつつ、画像を主軸に査定してください。分類が明らかに間違っている場合は無視してください。` },
+          hintsText ? { type: "input_text", text: hintsText } : null,
+          referenceText
+            ? { type: "input_text", text: referenceText + "\n---\n上記の参考情報のうち画像に最も近いものを優先的に活用してください。" }
+            : null,
+          ...images.map((u) => ({ type: "input_image", image_url: u })),
+        ].filter(Boolean);
 
-    const first = aiRes.output?.[0]?.content?.[0];
-    const rawText: string = first?.text ?? "";
+        const aiRes: any = await callOpenAIWithRetry(openai, {
+          model: "gpt-4.1",
+          temperature: 0.2,
+          max_output_tokens: assess_mode === "bundle" ? 1200 : 1600,
+          input: [{ role: "user", content }],
+        });
 
-    if (!rawText) {
-      return NextResponse.json({ ok: false, error: "AI出力が空です。" }, { status: 500 });
-    }
+        const first = aiRes.output?.[0]?.content?.[0];
+        const rawText: string = first?.text ?? "";
 
-    // ===== JSONパース安定化 =====
-    const cleaned = rawText.replace(/```json/gi, "").replace(/```/g, "").trim();
+        if (!rawText) {
+          sendEvent("error", { ok: false, error: "AI出力が空です。" });
+          controller.close();
+          return;
+        }
 
-    let parsed: any;
-    try {
-      parsed = JSON.parse(cleaned);
-    } catch (e) {
-      console.error("JSON parse error:", e, rawText);
-      return NextResponse.json({ ok: false, error: "AI出力のJSON解析に失敗しました。" }, { status: 500 });
-    }
+        // JSONパース安定化
+        const cleaned = rawText.replace(/```json/gi, "").replace(/```/g, "").trim();
 
-    // output_text 最低保証
-    const output_text_raw = typeof parsed.output_text === "string" ? parsed.output_text : String(rawText);
-    let output_text = output_text_raw;
-    if (!output_text.includes("【想定相場】") && assess_mode !== "bundle") {
-      const sep = output_text.endsWith("\n") ? "" : "\n";
-      output_text = output_text + sep + "【想定相場】不明（データ不足）";
-    }
+        let parsed: any;
+        try {
+          parsed = JSON.parse(cleaned);
+        } catch (e) {
+          console.error("JSON parse error:", e, rawText);
+          sendEvent("error", { ok: false, error: "AI出力のJSON解析に失敗しました。" });
+          controller.close();
+          return;
+        }
 
-    const item_name: string | null = typeof parsed.item_name === "string" ? parsed.item_name.trim() : null;
-    const confidence: number | null = typeof parsed.confidence === "number" ? parsed.confidence : null;
-    const genre: string | null = typeof parsed.genre === "string" ? parsed.genre.trim() : null;
+        // output_text 最低保証
+        const output_text_raw = typeof parsed.output_text === "string" ? parsed.output_text : String(rawText);
+        let output_text = output_text_raw;
+        if (!output_text.includes("【想定相場】") && assess_mode !== "bundle") {
+          const sep = output_text.endsWith("\n") ? "" : "\n";
+          output_text = output_text + sep + "【想定相場】不明（データ不足）";
+        }
 
-    // 生成物をモード別に
-    let mercari_title: string | null = null;
-    let mercari_description: string | null = null;
-    let auction_title: string | null = null;
-    let bundle_pickups: any[] | null = null;
+        const item_name: string | null = typeof parsed.item_name === "string" ? parsed.item_name.trim() : null;
+        const confidence: number | null = typeof parsed.confidence === "number" ? parsed.confidence : null;
+        const genre: string | null = typeof parsed.genre === "string" ? parsed.genre.trim() : null;
 
-    if (assess_mode === "bundle") {
-      mercari_title = null;
-      mercari_description = null;
-      auction_title = null;
-      bundle_pickups = Array.isArray(parsed.bundle_pickups) ? parsed.bundle_pickups : null;
-    } else if (listing_mode === "flea") {
-      mercari_title = buildMercariTitle(parsed.mercari_title, item_name, output_text);
-      mercari_description = typeof parsed.mercari_description === "string" ? parsed.mercari_description : output_text;
-      auction_title = null;
-      bundle_pickups = null;
-    } else {
-      const tmpMercariTitle = buildMercariTitle(parsed.mercari_title, item_name, output_text);
-      auction_title = buildAuctionTitle(parsed.auction_title, item_name, tmpMercariTitle, output_text);
-      mercari_title = null;
-      mercari_description = null;
-      bundle_pickups = null;
-    }
+        // 生成物をモード別に
+        let mercari_title: string | null = null;
+        let mercari_description: string | null = null;
+        let auction_title: string | null = null;
+        let bundle_pickups: any[] | null = null;
 
-    // ===== usage_events 加算（成功時のみ）=====
-    await insertUsageEventSplit({
-      user_id,
-      units,
-      assess_mode,
-      listing_mode: assess_mode === "bundle" ? null : listing_mode,
-      allow_overage,
-    });
+        if (assess_mode === "bundle") {
+          mercari_title = null;
+          mercari_description = null;
+          auction_title = null;
+          bundle_pickups = Array.isArray(parsed.bundle_pickups) ? parsed.bundle_pickups : null;
+        } else if (listing_mode === "flea") {
+          mercari_title = buildMercariTitle(parsed.mercari_title, item_name, output_text);
+          mercari_description = typeof parsed.mercari_description === "string" ? parsed.mercari_description : output_text;
+          auction_title = null;
+          bundle_pickups = null;
+        } else {
+          const tmpMercariTitle = buildMercariTitle(parsed.mercari_title, item_name, output_text);
+          auction_title = buildAuctionTitle(parsed.auction_title, item_name, tmpMercariTitle, output_text);
+          mercari_title = null;
+          mercari_description = null;
+          bundle_pickups = null;
+        }
 
-    const updatedUsage = await getMonthlyUsageUnits(user_id);
+        // ===== Stage 4: 結果送信（DB保存を待たずに先にクライアントに返す） =====
+        sendEvent("progress", { stage: "saving", message: "結果を保存中..." });
 
-    // appraisals 保存（既存維持）
-    try {
-      await supabase.from("appraisals").insert([
-        {
+        // usage_events 加算
+        await insertUsageEventSplit({
           user_id,
-          genre,
-          item_name,
-          confidence,
+          units,
+          assess_mode,
+          listing_mode: assess_mode === "bundle" ? null : listing_mode,
+          allow_overage,
+        });
+
+        const updatedUsage = await getMonthlyUsageUnits(user_id);
+
+        // 結果を先にクライアントに送信
+        const resultPayload = {
+          ok: true,
+          output_text,
           mercari_title,
           mercari_description,
           auction_title,
           listing_mode: assess_mode === "bundle" ? "flea" : listing_mode,
-          output_text,
-          image_urls: images,
-          model: "gpt-4.1",
-        },
-      ]);
-    } catch (e) {
-      console.error("appraisals 保存中の例外:", e);
-    }
-
-    // ★ 学習提供ONの時だけ training_items 保存（ここが核心）
-    try {
-      if (allow_training) {
-        const isTrainable = confidence !== null && confidence >= 90;
-        await supabase.from("training_items").insert([
-          {
-            genre,
-            item_name,
-            image_urls: images,
-            output_text,
-            mercari_title,
-            mercari_description,
-            auction_title,
-            listing_mode: assess_mode === "bundle" ? "flea" : listing_mode,
-            model: "gpt-4.1",
-            source: "kanteno-web",
-            confidence,
-            is_trainable: isTrainable,
-            raw_request: { image_urls: images, listing_mode, assess_mode, user_hints: hints },
-            raw_response: aiRes,
+          assess_mode,
+          bundle_pickups,
+          confidence,
+          genre,
+          item_name,
+          detected_genre: detectedGenre,
+          usage: {
+            used_units: updatedUsage.used,
+            limit_units: MONTHLY_LIMIT_UNITS,
+            overage_units: updatedUsage.over,
           },
-        ]);
+          settings: {
+            allow_training,
+          },
+        };
+
+        sendEvent("result", resultPayload);
+
+        // ===== DB保存はバックグラウンド（結果送信後に並列実行） =====
+        const savePromises: Promise<any>[] = [];
+
+        savePromises.push(
+          (async () => {
+            try {
+              await supabase.from("appraisals").insert([
+                {
+                  user_id,
+                  genre,
+                  item_name,
+                  confidence,
+                  mercari_title,
+                  mercari_description,
+                  auction_title,
+                  listing_mode: assess_mode === "bundle" ? "flea" : listing_mode,
+                  output_text,
+                  image_urls: images,
+                  model: "gpt-4.1",
+                },
+              ]);
+            } catch (e) {
+              console.error("appraisals 保存中の例外:", e);
+            }
+          })()
+        );
+
+        if (allow_training) {
+          const isTrainable = confidence !== null && confidence >= 90;
+          savePromises.push(
+            (async () => {
+              try {
+                await supabase.from("training_items").insert([
+                  {
+                    genre,
+                    item_name,
+                    image_urls: images,
+                    output_text,
+                    mercari_title,
+                    mercari_description,
+                    auction_title,
+                    listing_mode: assess_mode === "bundle" ? "flea" : listing_mode,
+                    model: "gpt-4.1",
+                    source: "kanteno-web",
+                    confidence,
+                    is_trainable: isTrainable,
+                    raw_request: { image_urls: images, listing_mode, assess_mode, user_hints: hints },
+                    raw_response: aiRes,
+                  },
+                ]);
+              } catch (e) {
+                console.error("training_items 保存中の例外:", e);
+              }
+            })()
+          );
+        }
+
+        savePromises.push(
+          (async () => {
+            try {
+              await supabase.from("assessment_jobs").insert([
+                {
+                  user_id,
+                  image_urls: images,
+                  status: "done",
+                  result: {
+                    output_text,
+                    mercari_title,
+                    mercari_description,
+                    auction_title,
+                    listing_mode: assess_mode === "bundle" ? "flea" : listing_mode,
+                    assess_mode,
+                    bundle_pickups,
+                    confidence,
+                    genre,
+                    item_name,
+                    user_hints: hints,
+                    detected_genre: detectedGenre,
+                  },
+                  error_message: null,
+                },
+              ]);
+            } catch (e) {
+              console.error("assessment_jobs 保存中の例外:", e);
+            }
+          })()
+        );
+
+        await Promise.all(savePromises);
+
+        sendEvent("done", {});
+        controller.close();
+      } catch (e: any) {
+        console.error("assess error", e);
+
+        const status = e?.status ?? e?.response?.status;
+        if (status === 429) {
+          sendEvent("error", { ok: false, error: "AI側のレート制限に達しています。少し時間をおいて再度お試しください。" });
+        } else {
+          sendEvent("error", { ok: false, error: e?.message ?? "査定中にエラーが発生しました。" });
+        }
+        controller.close();
       }
-    } catch (e) {
-      console.error("training_items 保存中の例外:", e);
-    }
+    },
+  });
 
-    // assessment_jobs 保存（既存維持）
-    try {
-      await supabase.from("assessment_jobs").insert([
-        {
-          user_id,
-          image_urls: images,
-          status: "done",
-          result: {
-            output_text,
-            mercari_title,
-            mercari_description,
-            auction_title,
-            listing_mode: assess_mode === "bundle" ? "flea" : listing_mode,
-            assess_mode,
-            bundle_pickups,
-            confidence,
-            genre,
-            item_name,
-            user_hints: hints,
-          },
-          error_message: null,
-        },
-      ]);
-    } catch (e) {
-      console.error("assessment_jobs 保存中の例外:", e);
-    }
-
-    return NextResponse.json(
-      {
-        ok: true,
-        output_text,
-        mercari_title,
-        mercari_description,
-        auction_title,
-        listing_mode: assess_mode === "bundle" ? "flea" : listing_mode,
-        assess_mode,
-        bundle_pickups,
-        confidence,
-        genre,
-        item_name,
-        usage: {
-          used_units: updatedUsage.used,
-          limit_units: MONTHLY_LIMIT_UNITS,
-          overage_units: updatedUsage.over,
-        },
-        settings: {
-          allow_training,
-        },
-      },
-      { status: 200 }
-    );
-  } catch (e: any) {
-    console.error("assess error", e);
-
-    const status = e?.status ?? e?.response?.status;
-    if (status === 429) {
-      return NextResponse.json({ ok: false, error: "AI側のレート制限に達しています。少し時間をおいて再度お試しください。" }, { status: 429 });
-    }
-
-    return NextResponse.json({ ok: false, error: e?.message ?? "査定中にエラーが発生しました。" }, { status: 500 });
-  }
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    },
+  });
 }
+
