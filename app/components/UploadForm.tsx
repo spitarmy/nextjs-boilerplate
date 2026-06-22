@@ -63,7 +63,7 @@ const MAX_ORIGINAL_SIZE_PER_FILE = 10 * 1024 * 1024; // 10MB/枚
 const MAX_ORIGINAL_TOTAL_SIZE = 25 * 1024 * 1024; // 合計25MB（元画像の目安）
 
 // ★ 精度重視（ロゴ・刻印・落款などの細部認識を確保）
-const MAX_LONG_SIDE = 1280;
+const MAX_LONG_SIDE = 1024;
 const JPEG_QUALITY = 0.80;
 
 // ★ dataURL合計ガード（高解像度化に合わせて引き上げ）
@@ -1156,15 +1156,15 @@ export default function UploadForm() {
                 style={{
                   padding: isMobile ? 14 : 16,
                   borderRadius: 16,
-                  background: "linear-gradient(135deg, rgba(234,179,8,0.12), rgba(251,146,60,0.08))",
+                  background: "radial-gradient(circle at top left, rgba(234,179,8,0.18), #0f172a)",
                   border: "1px solid rgba(234,179,8,0.5)",
-                  color: "#fef3c7",
+                  color: "#e5e7eb",
                 }}
               >
                 <h3 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 700, color: "#fbbf24" }}>
                   📷 追加写真で再査定
                 </h3>
-                <p style={{ fontSize: 12, lineHeight: 1.7, margin: "0 0 12px", color: "#fde68a" }}>
+                <p style={{ fontSize: 12, lineHeight: 1.7, margin: "0 0 12px", color: "#e2e8f0" }}>
                   真贋判定に追加の写真が必要です。査定コメントで指示された部位（刻印、内側、底面など）の写真を追加して再査定できます。
                 </p>
 
@@ -1205,7 +1205,7 @@ export default function UploadForm() {
                 {/* 追加写真プレビュー */}
                 {additionalFiles.length > 0 && (
                   <div style={{ marginBottom: 10 }}>
-                    <div style={{ fontSize: 11, color: "#fde68a", marginBottom: 6 }}>
+                    <div style={{ fontSize: 11, color: "#cbd5e1", marginBottom: 6 }}>
                       追加写真: {additionalFiles.length}枚選択済み
                     </div>
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
