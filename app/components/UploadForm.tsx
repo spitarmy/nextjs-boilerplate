@@ -144,6 +144,11 @@ export default function UploadForm() {
     notes: "",
   });
 
+  // ★ 追加写真で再査定
+  const [additionalFiles, setAdditionalFiles] = useState<File[]>([]);
+  const [additionalLoading, setAdditionalLoading] = useState(false);
+  const additionalPickerRef = useRef<HTMLInputElement | null>(null);
+
   // ★ モバイルで「写真選択」「その場で撮影」を出すための hidden input
   const pickerRef = useRef<HTMLInputElement | null>(null);
   const cameraRef = useRef<HTMLInputElement | null>(null);
@@ -454,6 +459,133 @@ export default function UploadForm() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     await submitInternal(false);
+  };
+
+  // ★ 追加写真で再査定
+  const submitAdditionalPhotos = async () => {
+    if (!additionalFiles.length || !result) return;
+
+    setErrorMsg(null);
+    setAdditionalLoading(true);
+    setProgressStage("追加写真を圧縮中...");
+
+    try {
+      // 元の画像を再利用（既にresultに含まれている前回の画像URLは使えないので、filesから再圧縮）
+      const originalUrls: string[] = [];
+      for (const file of files) {
+        const dataUrl = await fileToCompressedDataUrl(file);
+        originalUrls.push(dataUrl);
+      }
+
+      // 追加写真を圧縮
+      const additionalUrls: string[] = [];
+      for (const file of additionalFiles) {
+        const dataUrl = await fileToCompressedDataUrl(file);
+        additionalUrls.push(dataUrl);
+      }
+
+      const allImageUrls = [...originalUrls, ...additionalUrls];
+
+      // ヒントを構築
+      const userHints: UserHints = {};
+      (Object.keys(hints) as (keyof UserHints)[]).forEach((k) => {
+        const v = (hints[k] ?? "").toString().trim();
+        if (v) userHints[k] = v;
+      });
+
+      // 前回の査定結果をnotesに追加（AIに前回のコンテキストを伝える）
+      const prevContext = [
+        `【前回の査定結果（追加写真による再査定）】`,
+        `前回の判定: 信頼度 ${result.confidence ?? "不明"}%`,
+        `前回のジャンル: ${result.genre ?? "不明"}`,
+        `前回の型名: ${result.item_name ?? "不明"}`,
+        `前回のコメント抜粋: ${(result.output_text ?? "").slice(0, 300)}`,
+        ``,
+        `上記は前回の査定結果です。今回は追加写真（${additionalFiles.length}枚）が追加されています。`,
+        `前回「要追加写真」と判定された部位を重点的に確認し、より確度の高い判定を行ってください。`,
+      ].join("\n");
+
+      const mergedHints = {
+        ...userHints,
+        notes: userHints.notes
+          ? `${userHints.notes}\n\n${prevContext}`
+          : prevContext,
+      };
+
+      setProgressStage("サーバーに送信中...");
+
+      const res = await fetch("/api/assess", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          image_urls: allImageUrls,
+          user_id: userId,
+          listing_mode: listingMode,
+          assess_mode: assessMode,
+          allow_overage: true, // 追加査定は超過許可
+          user_hints: mergedHints,
+        }),
+      });
+
+      const contentType = res.headers.get("content-type") || "";
+
+      if (contentType.includes("text/event-stream") && res.body) {
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const events = buffer.split("\n\n");
+          buffer = events.pop() || "";
+
+          for (const block of events) {
+            if (!block.trim()) continue;
+            const lines = block.split("\n");
+            let eventType = "";
+            let eventData = "";
+            for (const line of lines) {
+              if (line.startsWith("event: ")) eventType = line.slice(7).trim();
+              else if (line.startsWith("data: ")) eventData = line.slice(6);
+            }
+            if (!eventType || !eventData) continue;
+            try {
+              const data = JSON.parse(eventData);
+              if (eventType === "progress") {
+                setProgressStage(data.message || "再査定中...");
+              } else if (eventType === "result") {
+                const json = data as AssessResponse;
+                if (json?.usage) setUsage(json.usage);
+                setResult(json);
+                setAdditionalFiles([]);
+              } else if (eventType === "error") {
+                const json = data as AssessResponse;
+                if (json?.usage) setUsage(json.usage);
+                setErrorMsg(json.error || "再査定に失敗しました。");
+              }
+            } catch { /* ignore */ }
+          }
+        }
+      } else {
+        const json: AssessResponse = await res.json();
+        if (json?.usage) setUsage(json.usage);
+        if (json.ok) {
+          setResult(json);
+          setAdditionalFiles([]);
+        } else {
+          setErrorMsg(json.error || "再査定に失敗しました。");
+        }
+      }
+    } catch (err) {
+      console.error(err);
+      setErrorMsg("通信エラーが発生しました。");
+    } finally {
+      setAdditionalLoading(false);
+      setProgressStage(null);
+    }
   };
 
   const inputStyle: React.CSSProperties = {
@@ -1017,6 +1149,140 @@ export default function UploadForm() {
                 {"　"}モード: {result.assess_mode === "bundle" ? "まとめ査定" : isAuction ? "オークション" : "フリマ"}
               </div>
             </section>
+
+            {/* ★ 追加写真で再査定（信頼度60-79% = 要追加写真） */}
+            {typeof result.confidence === "number" && result.confidence >= 60 && result.confidence < 80 && (
+              <section
+                style={{
+                  padding: isMobile ? 14 : 16,
+                  borderRadius: 16,
+                  background: "linear-gradient(135deg, rgba(234,179,8,0.12), rgba(251,146,60,0.08))",
+                  border: "1px solid rgba(234,179,8,0.5)",
+                  color: "#fef3c7",
+                }}
+              >
+                <h3 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 700, color: "#fbbf24" }}>
+                  📷 追加写真で再査定
+                </h3>
+                <p style={{ fontSize: 12, lineHeight: 1.7, margin: "0 0 12px", color: "#fde68a" }}>
+                  真贋判定に追加の写真が必要です。査定コメントで指示された部位（刻印、内側、底面など）の写真を追加して再査定できます。
+                </p>
+
+                {/* 追加写真選択 */}
+                <input
+                  ref={additionalPickerRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  style={{ display: "none" }}
+                  onChange={(e) => {
+                    const newFiles = Array.from(e.target.files ?? []);
+                    setAdditionalFiles((prev) => [...prev, ...newFiles].slice(0, 5));
+                    e.target.value = "";
+                  }}
+                />
+
+                <button
+                  type="button"
+                  onClick={() => additionalPickerRef.current?.click()}
+                  disabled={additionalLoading}
+                  style={{
+                    width: "100%",
+                    padding: "10px 16px",
+                    borderRadius: 12,
+                    border: "1px dashed rgba(234,179,8,0.6)",
+                    background: "rgba(234,179,8,0.08)",
+                    color: "#fbbf24",
+                    fontSize: 13,
+                    fontWeight: 600,
+                    cursor: additionalLoading ? "default" : "pointer",
+                    marginBottom: additionalFiles.length > 0 ? 10 : 0,
+                  }}
+                >
+                  📎 追加写真を選択（最大5枚）
+                </button>
+
+                {/* 追加写真プレビュー */}
+                {additionalFiles.length > 0 && (
+                  <div style={{ marginBottom: 10 }}>
+                    <div style={{ fontSize: 11, color: "#fde68a", marginBottom: 6 }}>
+                      追加写真: {additionalFiles.length}枚選択済み
+                    </div>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      {additionalFiles.map((f, i) => (
+                        <div
+                          key={i}
+                          style={{
+                            position: "relative",
+                            width: 56,
+                            height: 56,
+                            borderRadius: 8,
+                            overflow: "hidden",
+                            border: "1px solid rgba(234,179,8,0.4)",
+                          }}
+                        >
+                          <img
+                            src={URL.createObjectURL(f)}
+                            alt={`追加${i + 1}`}
+                            style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setAdditionalFiles((prev) => prev.filter((_, idx) => idx !== i))}
+                            style={{
+                              position: "absolute",
+                              top: 2,
+                              right: 2,
+                              width: 18,
+                              height: 18,
+                              borderRadius: "50%",
+                              border: "none",
+                              background: "rgba(0,0,0,0.7)",
+                              color: "#fff",
+                              fontSize: 10,
+                              cursor: "pointer",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              padding: 0,
+                            }}
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* 再査定ボタン */}
+                {additionalFiles.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={submitAdditionalPhotos}
+                    disabled={additionalLoading}
+                    style={{
+                      width: "100%",
+                      padding: "12px 16px",
+                      borderRadius: 12,
+                      border: "none",
+                      background: additionalLoading
+                        ? "linear-gradient(to right, #92400e, #78350f)"
+                        : "linear-gradient(to right, #d97706, #b45309)",
+                      color: "#fff",
+                      fontSize: 14,
+                      fontWeight: 700,
+                      cursor: additionalLoading ? "default" : "pointer",
+                      boxShadow: "0 4px 12px rgba(217,119,6,0.3)",
+                    }}
+                  >
+                    {additionalLoading
+                      ? (progressStage || "再査定中...")
+                      : `📷 追加写真で再査定する（元${files.length}枚 + 追加${additionalFiles.length}枚）`}
+                  </button>
+                )}
+              </section>
+            )}
 
             {/* まとめ査定 */}
             {result.assess_mode === "bundle" && Array.isArray(result.bundle_pickups) && (
