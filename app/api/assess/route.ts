@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
 import { supabase } from "../../../lib/supabase";
+import { createSupabaseServerClient } from "../../../lib/supabaseServer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 60; // Vercel Pro: 最大60秒（Hobbyのデフォルト10秒では査定がタイムアウトする）
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -22,6 +24,16 @@ type GenreCategory =
   | "toy"
   | "electronics"
   | "other";
+
+// ===== ヒント値のサニタイズ（PostgRESTフィルタインジェクション防止） =====
+function sanitizeForFilter(value: string): string {
+  // PostgRESTのフィルタ構文で特殊な意味を持つ文字をエスケープ
+  return value
+    .replace(/[.,()"'\\]/g, "") // フィルタ構文の区切り文字を除去
+    .replace(/\s+/g, " ")       // 連続空白を正規化
+    .trim()
+    .slice(0, 100);              // 長さ制限
+}
 
 const MONTHLY_LIMIT_UNITS = 1500;
 const OVERAGE_FEE_YEN_PER_UNIT = 50; // 1件50円（0.5件なら25円）
@@ -348,9 +360,9 @@ async function loadReferencesForGenre(
 
       // ヒントがある場合、OR条件で絞り込み（関連性の高いリファレンスを優先取得）
       const brandFilters: string[] = [];
-      if (hints?.known_model) brandFilters.push(`model_name.ilike.%${hints.known_model}%`);
-      if (hints?.known_author) brandFilters.push(`brand.ilike.%${hints.known_author}%`);
-      if (hints?.known_title) brandFilters.push(`line_name.ilike.%${hints.known_title}%`);
+      if (hints?.known_model) brandFilters.push(`model_name.ilike.%${sanitizeForFilter(hints.known_model)}%`);
+      if (hints?.known_author) brandFilters.push(`brand.ilike.%${sanitizeForFilter(hints.known_author)}%`);
+      if (hints?.known_title) brandFilters.push(`line_name.ilike.%${sanitizeForFilter(hints.known_title)}%`);
 
       if (brandFilters.length > 0) {
         query = query.or(brandFilters.join(","));
@@ -390,9 +402,9 @@ async function loadReferencesForGenre(
 
       // ヒントがある場合、OR条件で関連作家を優先取得
       const wamonFilters: string[] = [];
-      if (hints?.known_author) wamonFilters.push(`author_name.ilike.%${hints.known_author}%`);
-      if (hints?.known_signature) wamonFilters.push(`signature_traits.ilike.%${hints.known_signature}%`);
-      if (hints?.known_seal) wamonFilters.push(`seal_text.ilike.%${hints.known_seal}%`);
+      if (hints?.known_author) wamonFilters.push(`author_name.ilike.%${sanitizeForFilter(hints.known_author)}%`);
+      if (hints?.known_signature) wamonFilters.push(`signature_traits.ilike.%${sanitizeForFilter(hints.known_signature)}%`);
+      if (hints?.known_seal) wamonFilters.push(`seal_text.ilike.%${sanitizeForFilter(hints.known_seal)}%`);
 
       if (wamonFilters.length > 0) {
         query = query.or(wamonFilters.join(","));
@@ -650,8 +662,22 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: "JSON形式のリクエストを送ってください。" }, { status: 400 });
   }
 
-  const user_id: string | null =
-    typeof (body as any).user_id === "string" && (body as any).user_id.trim().length > 0 ? (body as any).user_id : null;
+  // ★ サーバーサイド認証: クッキーからセッションを取得してuser_idを検証
+  let user_id: string | null = null;
+  try {
+    const supabaseAuth = createSupabaseServerClient();
+    const { data: { user } } = await supabaseAuth.auth.getUser();
+    user_id = user?.id ?? null;
+  } catch {
+    // 認証失敗時はnullのまま（ミドルウェアで弾かれるはずだがフォールバック）
+  }
+  // クライアントから送られたuser_idは信頼しない（フォールバックとしてのみ使用）
+  if (!user_id) {
+    const bodyUserId = typeof (body as any).user_id === "string" && (body as any).user_id.trim().length > 0
+      ? (body as any).user_id
+      : null;
+    user_id = bodyUserId;
+  }
 
   const assess_mode: AssessMode = (body as any).assess_mode === "bundle" ? "bundle" : "normal";
   const listing_mode: ListingMode = (body as any).listing_mode === "auction" ? "auction" : "flea";

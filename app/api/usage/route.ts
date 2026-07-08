@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "../../../lib/supabase";
+import { createSupabaseServerClient } from "../../../lib/supabaseServer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,8 +14,20 @@ function startOfMonthISO(d = new Date()): string {
 
 export async function GET(req: NextRequest) {
   try {
-    const url = new URL(req.url);
-    const user_id = url.searchParams.get("user_id");
+    // ★ サーバーサイド認証
+    let user_id: string | null = null;
+    try {
+      const supabaseAuth = createSupabaseServerClient();
+      const { data: { user } } = await supabaseAuth.auth.getUser();
+      user_id = user?.id ?? null;
+    } catch { /* fallback */ }
+
+    // フォールバック: クエリパラメータ（認証が効かない場合用）
+    if (!user_id) {
+      const url = new URL(req.url);
+      user_id = url.searchParams.get("user_id");
+    }
+
     if (!user_id) {
       return NextResponse.json({ ok: false, error: "user_id がありません。" }, { status: 400 });
     }

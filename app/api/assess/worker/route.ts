@@ -5,6 +5,7 @@ import { supabase } from "../../../../lib/supabase";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -312,6 +313,16 @@ async function processJob(job: any) {
 // --- worker の本体 -----------------------------------------------------
 
 export async function GET(req: NextRequest) {
+  // ★ 認証: CRON_SECRETが設定されている場合は検証
+  const cronSecret = process.env.CRON_SECRET;
+  if (cronSecret) {
+    const authHeader = req.headers.get("authorization") || "";
+    const bearerToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+    if (bearerToken !== cronSecret) {
+      return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+    }
+  }
+
   try {
     // 1. pending ジョブを最大 3 件だけ取得
     const { data: jobs } = await supabase

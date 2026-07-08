@@ -9,12 +9,13 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "next": "14.2.5",
-    "react": "18.3.1",
-    "react-dom": "18.3.1",
+    "@supabase/ssr": "^0.12.0",
     "@supabase/supabase-js": "^2.45.0",
+    "browser-image-compression": "^2.0.2",
+    "next": "14.2.5",
     "openai": "^4.56.0",
-    "browser-image-compression": "^2.0.2"
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
   },
   "devDependencies": {
     "@types/node": "^20.11.30",
@@ -27,5 +28,7 @@
     "tailwindcss": "^3.4.3",
     "typescript": "5.6.3"
   },
-  "engines": { "node": ">=18" }
+  "engines": {
+    "node": ">=18"
+  }
 }

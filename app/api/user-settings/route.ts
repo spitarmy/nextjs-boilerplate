@@ -1,13 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "../../../lib/supabase";
+import { createSupabaseServerClient } from "../../../lib/supabaseServer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+// ★ サーバーサイドでuser_idを取得するヘルパー
+async function getAuthUserId(fallbackId?: string | null): Promise<string | null> {
+  try {
+    const supabaseAuth = createSupabaseServerClient();
+    const { data: { user } } = await supabaseAuth.auth.getUser();
+    if (user?.id) return user.id;
+  } catch { /* fallback */ }
+  return fallbackId ?? null;
+}
+
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
-    const user_id = searchParams.get("user_id");
+    const user_id = await getAuthUserId(searchParams.get("user_id"));
 
     if (!user_id) {
       return NextResponse.json({ ok: false, error: "user_id がありません。" }, { status: 400 });
@@ -39,8 +50,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: "JSON形式のリクエストを送ってください。" }, { status: 400 });
     }
 
-    const user_id =
+    const bodyUserId =
       typeof body.user_id === "string" && body.user_id.trim().length > 0 ? body.user_id.trim() : null;
+    const user_id = await getAuthUserId(bodyUserId);
 
     const allow_training = Boolean(body.allow_training);
 
