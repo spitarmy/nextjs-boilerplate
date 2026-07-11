@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
 import { supabase } from "../../../lib/supabase";
 import { createSupabaseServerClient } from "../../../lib/supabaseServer";
+import { checkRateLimit } from "../../../lib/rateLimit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -677,6 +678,25 @@ export async function POST(req: NextRequest) {
       ? (body as any).user_id
       : null;
     user_id = bodyUserId;
+  }
+
+  // ★ レート制限チェック（OpenAI APIコール前に実行）
+  if (user_id) {
+    const rateCheck = checkRateLimit(user_id);
+    if (!rateCheck.allowed) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "リクエストが多すぎます。しばらく時間をおいてから再度お試しください。",
+        },
+        {
+          status: 429,
+          headers: {
+            "Retry-After": String(rateCheck.retryAfter ?? 60),
+          },
+        }
+      );
+    }
   }
 
   const assess_mode: AssessMode = (body as any).assess_mode === "bundle" ? "bundle" : "normal";

@@ -66,16 +66,8 @@ const MAX_ORIGINAL_TOTAL_SIZE = 25 * 1024 * 1024; // 合計25MB（元画像の�
 const MAX_LONG_SIDE = 1024;
 const JPEG_QUALITY = 0.80;
 
-// ★ dataURL合計ガード（高解像度化に合わせて引き上げ）
-const MAX_TOTAL_DATAURL_BYTES = 15 * 1024 * 1024; // 15MB目安
-
-function estimateDataUrlBytes(dataUrl: string): number {
-  const comma = dataUrl.indexOf(",");
-  const base64 = comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl;
-  return Math.floor((base64.length * 3) / 4);
-}
-
-async function fileToCompressedDataUrl(file: File): Promise<string> {
+// ★ 画像を圧縮してBlobとして返す
+async function fileToCompressedBlob(file: File): Promise<Blob> {
   const img = document.createElement("img");
   const url = URL.createObjectURL(file);
 
@@ -97,10 +89,62 @@ async function fileToCompressedDataUrl(file: File): Promise<string> {
   canvas.width = width;
   canvas.height = height;
   ctx.drawImage(img, 0, 0, width, height);
-
-  const dataUrl = canvas.toDataURL("image/jpeg", JPEG_QUALITY);
   URL.revokeObjectURL(url);
-  return dataUrl;
+
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => (blob ? resolve(blob) : reject(new Error("toBlob failed"))),
+      "image/jpeg",
+      JPEG_QUALITY
+    );
+  });
+}
+
+// ★ 署名URL方式: 画像をSupabase Storageに直接アップロードし、publicURLを返す
+async function uploadImageToStorage(file: File): Promise<string> {
+  // 1. 画像を圧縮
+  const blob = await fileToCompressedBlob(file);
+
+  // 2. 署名付きURLを取得
+  const filename = file.name || "image.jpg";
+  const urlRes = await fetch("/api/upload-url", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filename }),
+  });
+  const urlData = await urlRes.json();
+  if (!urlData.ok) throw new Error(urlData.message || "署名URL取得失敗");
+
+  // 3. Supabase Storageに直接アップロード
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+  const uploadEndpoint = `${supabaseUrl}/storage/v1/object/${urlData.bucket}/${urlData.path}`;
+  const uploadRes = await fetch(uploadEndpoint, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "image/jpeg",
+      "x-upsert": "true",
+      Authorization: `Bearer ${urlData.token}`,
+    },
+    body: blob,
+  });
+
+  if (!uploadRes.ok) {
+    throw new Error(`アップロード失敗: ${uploadRes.status}`);
+  }
+
+  // 4. publicURLを返す
+  return urlData.publicUrl;
+}
+
+// ★ data URL方式（フォールバック用）
+async function fileToCompressedDataUrl(file: File): Promise<string> {
+  const blob = await fileToCompressedBlob(file);
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
 }
 
 // ★ 同一ファイル重複追加を軽減（完璧ではないが実用的）
@@ -320,24 +364,23 @@ export default function UploadForm() {
     }
 
     setLoading(true);
-    setProgressStage("画像を圧縮中...");
+    setProgressStage("画像をアップロード中...");
 
     try {
       const imageUrls: string[] = [];
-      let totalDataBytes = 0;
 
-      for (const file of files) {
-        const dataUrl = await fileToCompressedDataUrl(file);
-        totalDataBytes += estimateDataUrlBytes(dataUrl);
-        if (totalDataBytes > MAX_TOTAL_DATAURL_BYTES) {
-          setErrorMsg(
-            "画像データが大きすぎて送信時にエラーになる可能性があります。画像を減らすか、不要背景をトリミングして再度お試しください。"
-          );
-          setLoading(false);
-          setProgressStage(null);
-          return;
+      for (let i = 0; i < files.length; i++) {
+        setProgressStage(`画像をアップロード中... (${i + 1}/${files.length})`);
+        try {
+          // 署名URL方式でアップロード
+          const publicUrl = await uploadImageToStorage(files[i]);
+          imageUrls.push(publicUrl);
+        } catch (uploadErr) {
+          // フォールバック: 署名URL失敗時はdata URLで送信
+          console.warn("署名URLアップロード失敗、data URLで代替:", uploadErr);
+          const dataUrl = await fileToCompressedDataUrl(files[i]);
+          imageUrls.push(dataUrl);
         }
-        imageUrls.push(dataUrl);
       }
 
       // ★ 空文字は送らない（API側でnull扱いしやすく）
@@ -470,18 +513,30 @@ export default function UploadForm() {
     setProgressStage("追加写真を圧縮中...");
 
     try {
-      // 元の画像を再利用（既にresultに含まれている前回の画像URLは使えないので、filesから再圧縮）
+      // 元の画像を署名URLでアップロード
       const originalUrls: string[] = [];
-      for (const file of files) {
-        const dataUrl = await fileToCompressedDataUrl(file);
-        originalUrls.push(dataUrl);
+      for (let i = 0; i < files.length; i++) {
+        setProgressStage(`元画像をアップロード中... (${i + 1}/${files.length})`);
+        try {
+          const publicUrl = await uploadImageToStorage(files[i]);
+          originalUrls.push(publicUrl);
+        } catch {
+          const dataUrl = await fileToCompressedDataUrl(files[i]);
+          originalUrls.push(dataUrl);
+        }
       }
 
-      // 追加写真を圧縮
+      // 追加写真をアップロード
       const additionalUrls: string[] = [];
-      for (const file of additionalFiles) {
-        const dataUrl = await fileToCompressedDataUrl(file);
-        additionalUrls.push(dataUrl);
+      for (let i = 0; i < additionalFiles.length; i++) {
+        setProgressStage(`追加写真をアップロード中... (${i + 1}/${additionalFiles.length})`);
+        try {
+          const publicUrl = await uploadImageToStorage(additionalFiles[i]);
+          additionalUrls.push(publicUrl);
+        } catch {
+          const dataUrl = await fileToCompressedDataUrl(additionalFiles[i]);
+          additionalUrls.push(dataUrl);
+        }
       }
 
       const allImageUrls = [...originalUrls, ...additionalUrls];
