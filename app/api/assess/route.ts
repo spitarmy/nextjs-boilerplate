@@ -164,20 +164,58 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// ===== OpenAI呼び出し（429時はリトライ） =====
-async function callOpenAIWithRetry(client: OpenAI, payload: any, maxRetries = 2): Promise<any> {
+// ===== OpenAI呼び出し（429/500/503時はリトライ） =====
+async function callOpenAIWithRetry(client: OpenAI, payload: any, maxRetries = 3): Promise<any> {
   let attempt = 0;
+  const retryableStatuses = [429, 500, 502, 503];
   while (true) {
     try {
       return await client.responses.create(payload);
     } catch (err: any) {
       const status = err?.status ?? err?.response?.status;
-      if (status !== 429 || attempt >= maxRetries) throw err;
+      if (!retryableStatuses.includes(status) || attempt >= maxRetries) {
+        // リトライ不可なエラーは分類してログ
+        const errorCategory = categorizeOpenAIError(err);
+        console.error(`[KANTENO_ERROR] category=${errorCategory} status=${status} model=${payload.model} attempt=${attempt}`, err?.message);
+        throw err;
+      }
       attempt += 1;
-      const waitMs = 1500 * attempt;
-      console.warn(`OpenAI rate limit (429) on attempt ${attempt}, retrying in ${waitMs}ms`);
+      const waitMs = Math.min(2000 * Math.pow(2, attempt - 1), 10000); // 指数バックオフ（最大10秒）
+      console.warn(`[KANTENO_RETRY] status=${status} attempt=${attempt}/${maxRetries} wait=${waitMs}ms model=${payload.model}`);
       await sleep(waitMs);
     }
+  }
+}
+
+// ===== エラー分類 =====
+function categorizeOpenAIError(err: any): string {
+  const status = err?.status ?? err?.response?.status;
+  const message = (err?.message ?? "").toLowerCase();
+  if (status === 429) return "RATE_LIMIT";
+  if (status === 500 || status === 502 || status === 503) return "OPENAI_SERVER_ERROR";
+  if (status === 400) return "BAD_REQUEST";
+  if (status === 401) return "AUTH_ERROR";
+  if (message.includes("timeout") || message.includes("timed out")) return "TIMEOUT";
+  if (message.includes("network") || message.includes("econnrefused")) return "NETWORK_ERROR";
+  return "UNKNOWN";
+}
+
+// ===== ユーザー向けエラーメッセージ =====
+function getUserFriendlyError(err: any): string {
+  const category = categorizeOpenAIError(err);
+  switch (category) {
+    case "RATE_LIMIT":
+      return "AI側のレート制限に達しています。少し時間をおいて再度お試しください。";
+    case "OPENAI_SERVER_ERROR":
+      return "AIサービスが一時的に利用できません。数分後に再度お試しください。";
+    case "TIMEOUT":
+      return "査定がタイムアウトしました。画像を減らすか、再度お試しください。";
+    case "NETWORK_ERROR":
+      return "ネットワークエラーが発生しました。インターネット接続を確認してください。";
+    case "BAD_REQUEST":
+      return "画像の形式に問題がある可能性があります。別の画像でお試しください。";
+    default:
+      return "査定中にエラーが発生しました。しばらくしてから再度お試しください。";
   }
 }
 
@@ -746,8 +784,12 @@ export async function POST(req: NextRequest) {
         }
       }
 
+      const assessStartTime = Date.now();
+
       try {
         // ===== Stage 1: ジャンル分類 + 利用量チェック（並列） =====
+        console.log(`[KANTENO_ASSESS] start user=${user_id ?? 'anon'} images=${images.length} mode=${assess_mode} listing=${listing_mode}`);
+
         sendEvent("progress", { stage: "classify", message: "ジャンル分類中..." });
 
         const [monthUsage, allow_training, detectedGenre] = await Promise.all([
@@ -756,7 +798,8 @@ export async function POST(req: NextRequest) {
           classifyGenre(openai, images, hints),
         ]);
 
-        console.log(`[査定] ジャンル分類結果: ${detectedGenre}`);
+        const classifyMs = Date.now() - assessStartTime;
+        console.log(`[KANTENO_ASSESS] classified genre=${detectedGenre} elapsed=${classifyMs}ms`);
 
         // 月次上限チェック
         const wouldBe = Number((monthUsage.used + units).toFixed(1));
@@ -1004,16 +1047,17 @@ export async function POST(req: NextRequest) {
         await Promise.all(savePromises);
 
         sendEvent("done", {});
+
+        const totalMs = Date.now() - assessStartTime;
+        console.log(`[KANTENO_ASSESS] done user=${user_id ?? 'anon'} genre=${detectedGenre} confidence=${confidence ?? '?'} elapsed=${totalMs}ms`);
+
         controller.close();
       } catch (e: any) {
-        console.error("assess error", e);
+        const totalMs = Date.now() - assessStartTime;
+        const category = categorizeOpenAIError(e);
+        console.error(`[KANTENO_ERROR] assess_failed user=${user_id ?? 'anon'} category=${category} elapsed=${totalMs}ms`, e?.message);
 
-        const status = e?.status ?? e?.response?.status;
-        if (status === 429) {
-          sendEvent("error", { ok: false, error: "AI側のレート制限に達しています。少し時間をおいて再度お試しください。" });
-        } else {
-          sendEvent("error", { ok: false, error: e?.message ?? "査定中にエラーが発生しました。" });
-        }
+        sendEvent("error", { ok: false, error: getUserFriendlyError(e) });
         controller.close();
       }
     },
