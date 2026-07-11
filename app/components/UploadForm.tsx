@@ -405,6 +405,13 @@ export default function UploadForm() {
         }),
       });
 
+      // 認証エラー → ログインページへ
+      if (res.status === 401) {
+        window.localStorage.removeItem("kanteno_logged_in");
+        window.location.href = "/login?expired=1";
+        return;
+      }
+
       // SSE ストリーミング対応（text/event-stream の場合）
       const contentType = res.headers.get("content-type") || "";
 

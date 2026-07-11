@@ -2,16 +2,20 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "../../lib/supabase";
 
 export default function LoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const isExpired = searchParams.get("expired") === "1";
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(
+    isExpired ? "セッションの有効期限が切れました。再度ログインしてください。" : null
+  );
 
   // すでにログイン済みならトップではなく /assess へ
   useEffect(() => {
