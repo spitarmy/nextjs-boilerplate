@@ -1119,7 +1119,7 @@ export default function UploadForm() {
               boxShadow: "0 14px 35px rgba(37,99,235,0.45), 0 0 0 1px rgba(148,163,184,0.4)",
             }}
           >
-            {loading ? (progressStage || "AIが査定しています…") : "AI査定を開始する"}
+            {loading ? "処理中..." : "AI査定を開始する"}
           </button>
 
           {allowOverage && (
@@ -1142,6 +1142,39 @@ export default function UploadForm() {
             >
               超過で続行（1件50円・月末請求）
             </button>
+          )}
+
+          {/* ★ AI思考プロセス可視化UI */}
+          {loading && (
+            <div style={{ marginTop: 16, padding: 16, background: "rgba(248, 250, 252, 0.05)", borderRadius: 12, border: "1px solid rgba(226, 232, 240, 0.1)" }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#93c5fd", marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ display: "inline-block", animation: "spin 2s linear infinite" }}>⚙️</span> AI思考プロセス
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, fontSize: 12, fontFamily: "monospace" }}>
+                <div style={{ color: progressStage?.includes("アップロード") ? "#60a5fa" : "#34d399", display: "flex", alignItems: "center", gap: 6 }}>
+                  {progressStage?.includes("アップロード") ? <span style={{ animation: "pulse 1.5s infinite" }}>⏳ 画像を分析エンジンへ転送中...</span> : "✅ 転送完了"}
+                </div>
+                {(progressStage?.includes("ジャンル") || progressStage?.includes("リファレンス") || progressStage?.includes("査定") || progressStage?.includes("保存") || progressStage?.includes("生成")) && (
+                  <div style={{ color: progressStage?.includes("ジャンル") ? "#60a5fa" : "#34d399", display: "flex", alignItems: "center", gap: 6 }}>
+                    {progressStage?.includes("ジャンル") ? <span style={{ animation: "pulse 1.5s infinite" }}>⏳ 一次AI: ジャンルと特徴を抽出中...</span> : "✅ 一次AI: 特徴抽出完了"}
+                  </div>
+                )}
+                {(progressStage?.includes("リファレンス") || progressStage?.includes("査定") || progressStage?.includes("保存") || progressStage?.includes("生成")) && (
+                  <div style={{ color: progressStage?.includes("リファレンス") ? "#60a5fa" : "#34d399", display: "flex", alignItems: "center", gap: 6 }}>
+                    {progressStage?.includes("リファレンス") ? <span style={{ animation: "pulse 1.5s infinite" }}>⏳ 自社データベースと照合中...</span> : "✅ データベース照合完了"}
+                  </div>
+                )}
+                {(progressStage?.includes("査定") || progressStage?.includes("保存") || progressStage?.includes("生成")) && (
+                  <div style={{ color: (progressStage?.includes("査定") || progressStage?.includes("生成")) ? "#60a5fa" : "#34d399", display: "flex", alignItems: "center", gap: 6 }}>
+                    {(progressStage?.includes("査定") || progressStage?.includes("生成")) ? <span style={{ animation: "pulse 1.5s infinite" }}>⏳ 二次AI: 真贋判定・相場算定・文章生成中...</span> : "✅ 二次AI: 算定完了"}
+                  </div>
+                )}
+              </div>
+              <style>{`
+                @keyframes spin { 100% { transform: rotate(360deg); } }
+                @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+              `}</style>
+            </div>
           )}
         </form>
 
@@ -1204,11 +1237,25 @@ export default function UploadForm() {
             >
               <h3 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 600 }}>査定コメント</h3>
               <p style={{ whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.7 }}>{result.output_text}</p>
-              <div style={{ marginTop: 8, fontSize: 11, color: "#cbd5f5" }}>
-                信頼度: {typeof result.confidence === "number" ? `${result.confidence}%` : "不明"}
-                {"　"}ジャンル: {result.genre ?? "不明"}
-                {"　"}型名: {result.item_name ?? "不明"}
-                {"　"}モード: {result.assess_mode === "bundle" ? "まとめ査定" : isAuction ? "オークション" : "フリマ"}
+              <div style={{ marginTop: 8, fontSize: 12, color: "#cbd5f5", display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                  信頼度: 
+                  {typeof result.confidence === "number" ? (
+                    <span style={{
+                      backgroundColor: result.confidence >= 80 ? "#dcfce7" : result.confidence >= 60 ? "#fef08a" : "#fee2e2",
+                      color: result.confidence >= 80 ? "#166534" : result.confidence >= 60 ? "#854d0e" : "#991b1b",
+                      padding: "2px 6px",
+                      borderRadius: 4,
+                      fontWeight: 700,
+                      fontSize: 11
+                    }}>
+                      {result.confidence >= 80 ? "🟢高" : result.confidence >= 60 ? "🟡中" : "🔴低"} ({result.confidence}%)
+                    </span>
+                  ) : "不明"}
+                </span>
+                <span>{"　"}ジャンル: {result.genre ?? "不明"}</span>
+                <span>{"　"}型名: {result.item_name ?? "不明"}</span>
+                <span>{"　"}モード: {result.assess_mode === "bundle" ? "まとめ査定" : isAuction ? "オークション" : "フリマ"}</span>
               </div>
             </section>
 

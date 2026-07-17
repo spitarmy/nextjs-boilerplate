@@ -181,11 +181,34 @@ export default function HistoryPage() {
               style={{
                 fontSize: 12,
                 color: "#6b7280",
-                marginBottom: 4,
+                marginBottom: 8,
+                display: "flex",
+                alignItems: "center",
+                flexWrap: "wrap",
+                gap: 8
               }}
             >
-              ジャンル: {a.genre ?? "不明"} ／ 型名: {a.item_name ?? "不明"} ／
-              信頼度: {a.confidence != null ? `${a.confidence}%` : "不明"}
+              <span>ジャンル: {a.genre ?? "不明"}</span>
+              <span>／</span>
+              <span>型名: {a.item_name ?? "不明"}</span>
+              <span>／</span>
+              <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                信頼度: 
+                {a.confidence != null ? (
+                  <span style={{
+                    backgroundColor: a.confidence >= 80 ? "#dcfce7" : a.confidence >= 60 ? "#fef08a" : "#fee2e2",
+                    color: a.confidence >= 80 ? "#166534" : a.confidence >= 60 ? "#854d0e" : "#991b1b",
+                    padding: "2px 6px",
+                    borderRadius: 4,
+                    fontWeight: 700,
+                    fontSize: 11
+                  }}>
+                    {a.confidence >= 80 ? "🟢高" : a.confidence >= 60 ? "🟡中" : "🔴低"} ({a.confidence}%)
+                  </span>
+                ) : (
+                  "不明"
+                )}
+              </span>
             </div>
 
             {/* 査定コメント */}
