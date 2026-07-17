@@ -34,6 +34,21 @@ export default function AssessPage() {
             v?
           </span>
 
+          <a
+            href="/history"
+            style={{
+              fontSize: 13,
+              fontWeight: 600,
+              color: "#4f46e5",
+              textDecoration: "none",
+              background: "#e0e7ff",
+              padding: "6px 12px",
+              borderRadius: 6,
+            }}
+          >
+            📋 履歴を見る
+          </a>
+
           {/* ログアウトボタン */}
           <LogoutButton />
         </div>

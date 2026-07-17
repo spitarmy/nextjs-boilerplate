@@ -45,9 +45,81 @@ export default function HistoryPage() {
     fetchData();
   }, []);
 
+  const downloadCSV = () => {
+    if (items.length === 0) return;
+    
+    // ヘッダー
+    const header = ["日時", "ジャンル", "型名", "信頼度(%)", "タイトル", "査定コメント"].join(",");
+    
+    // データ行
+    const rows = items.map(a => {
+      const date = new Date(a.created_at).toLocaleString("ja-JP");
+      const genre = `"${a.genre || ""}"`;
+      const item_name = `"${a.item_name || ""}"`;
+      const confidence = a.confidence || "";
+      const title = `"${(a.mercari_title || "").replace(/"/g, '""')}"`;
+      const output = `"${(a.output_text || "").replace(/"/g, '""')}"`;
+      
+      return [date, genre, item_name, confidence, title, output].join(",");
+    });
+
+    const csvContent = [header, ...rows].join("\n");
+    // BOM付きUTF-8
+    const blob = new Blob([new Uint8Array([0xef, 0xbb, 0xbf]), csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `査定履歴_${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div style={{ maxWidth: 900, margin: "0 auto", padding: "16px" }}>
-      <h1 style={{ fontSize: 20, marginBottom: 16 }}>査定履歴</h1>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <a
+            href="/assess"
+            style={{
+              fontSize: 18,
+              textDecoration: "none",
+              color: "#4b5563",
+              background: "#f3f4f6",
+              padding: "4px 8px",
+              borderRadius: "50%",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 32,
+              height: 32
+            }}
+            title="査定画面に戻る"
+          >
+            ←
+          </a>
+          <h1 style={{ fontSize: 20, margin: 0 }}>査定履歴</h1>
+        </div>
+        
+        <button
+          onClick={downloadCSV}
+          disabled={items.length === 0}
+          style={{
+            fontSize: 13,
+            fontWeight: 600,
+            color: "#fff",
+            backgroundColor: items.length === 0 ? "#9ca3af" : "#10b981",
+            border: "none",
+            padding: "8px 16px",
+            borderRadius: 6,
+            cursor: items.length === 0 ? "not-allowed" : "pointer",
+            display: "flex",
+            alignItems: "center",
+            gap: 6
+          }}
+        >
+          📥 CSV出力
+        </button>
+      </div>
 
       {loading && <p>読み込み中...</p>}
 
