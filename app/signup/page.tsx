@@ -9,6 +9,7 @@ export default function SignUpPage() {
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
   const [inviteCode, setInviteCode] = useState(""); // 招待コード
+  const [plan, setPlan] = useState<"light" | "pro">("light");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -60,6 +61,7 @@ export default function SignUpPage() {
           userId: data.user.id,
           email,
           name,
+          plan,
         }),
       });
       const json = await res.json();
@@ -119,6 +121,40 @@ export default function SignUpPage() {
           onChange={(e) => setInviteCode(e.target.value)}
           required
         />
+
+        {/* プラン選択 */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <div
+            onClick={() => setPlan("light")}
+            style={{
+              padding: 14,
+              borderRadius: 10,
+              border: plan === "light" ? "2px solid #2563eb" : "1px solid #d1d5db",
+              background: plan === "light" ? "#eff6ff" : "#fff",
+              cursor: "pointer",
+              textAlign: "center",
+            }}
+          >
+            <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>ライト</div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: "#2563eb" }}>¥5,000<span style={{ fontSize: 11 }}>/月</span></div>
+            <div style={{ fontSize: 11, color: "#6b7280", marginTop: 4 }}>月100件まで</div>
+          </div>
+          <div
+            onClick={() => setPlan("pro")}
+            style={{
+              padding: 14,
+              borderRadius: 10,
+              border: plan === "pro" ? "2px solid #7c3aed" : "1px solid #d1d5db",
+              background: plan === "pro" ? "#f5f3ff" : "#fff",
+              cursor: "pointer",
+              textAlign: "center",
+            }}
+          >
+            <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>プロ</div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: "#7c3aed" }}>お問合せ</div>
+            <div style={{ fontSize: 11, color: "#6b7280", marginTop: 4 }}>無制限・CSV出力等</div>
+          </div>
+        </div>
 
         <button type="submit" disabled={loading}>
           {loading ? "登録中..." : "登録する"}

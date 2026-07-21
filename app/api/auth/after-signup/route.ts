@@ -5,11 +5,14 @@ import { supabaseAdmin } from "../../../../lib/supabaseAdmin";
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { userId, email, name } = body as {
+    const { userId, email, name, plan } = body as {
       userId: string;
       email: string;
       name?: string;
+      plan?: string;
     };
+
+    const userPlan = plan === "pro" ? "pro" : "light";
 
     if (!userId || !email) {
       return NextResponse.json(
@@ -46,6 +49,7 @@ export async function POST(req: NextRequest) {
         name: name || null,
         tenant_id: tenant.id,
         role: "owner",
+        plan: userPlan,
       });
 
     if (profileError) {
