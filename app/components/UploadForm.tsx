@@ -46,7 +46,8 @@ type AssessResponse = {
   };
 
   over_limit?: boolean;
-  required_overage_fee_yen?: number;
+
+  plan?: string;
 
   settings?: {
     allow_training?: boolean;
@@ -461,7 +462,7 @@ export default function UploadForm() {
                 if (json?.usage) setUsage(json.usage);
                 if (json?.over_limit) {
                   setResult(json);
-                  setErrorMsg(json.error || "今月の上限に達しました。超過で続行する場合は下のボタンを押してください。");
+                  setErrorMsg(json.error || "今月の上限に達しました。プロプランへのアップグレードをご検討ください。");
                 } else {
                   setErrorMsg(json.error || "査定に失敗しました。時間をおいて再度お試しください。");
                 }
@@ -482,7 +483,7 @@ export default function UploadForm() {
 
         if (res.status === 402 && json?.over_limit) {
           setResult(json);
-          setErrorMsg(json.error || "今月の上限に達しました。超過で続行する場合は下のボタンを押してください。");
+          setErrorMsg(json.error || "今月の上限に達しました。プロプランへのアップグレードをご検討ください。");
           return;
         }
 

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabase } from "../../../../lib/supabase";
 import { supabaseAdmin } from "../../../../lib/supabaseAdmin";
+import { createSupabaseServerClient } from "../../../../lib/supabaseServer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -11,13 +11,21 @@ function isAdmin(userId: string | null): boolean {
   return !!userId && admins.includes(userId);
 }
 
+async function getAuthUserId(): Promise<string | null> {
+  try {
+    const supabaseAuth = createSupabaseServerClient();
+    const { data: { user } } = await supabaseAuth.auth.getUser();
+    return user?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
 // GET: 全ユーザーのプラン一覧
 export async function GET() {
   try {
-    const { data: authData, error: authErr } = await supabase.auth.getUser();
-    if (authErr) return NextResponse.json({ ok: false, error: authErr.message }, { status: 401 });
-
-    if (!isAdmin(authData.user?.id ?? null)) {
+    const viewerId = await getAuthUserId();
+    if (!isAdmin(viewerId)) {
       return NextResponse.json({ ok: false, error: "forbidden" }, { status: 403 });
     }
 
@@ -37,10 +45,8 @@ export async function GET() {
 // POST: プラン変更
 export async function POST(req: NextRequest) {
   try {
-    const { data: authData, error: authErr } = await supabase.auth.getUser();
-    if (authErr) return NextResponse.json({ ok: false, error: authErr.message }, { status: 401 });
-
-    if (!isAdmin(authData.user?.id ?? null)) {
+    const viewerId = await getAuthUserId();
+    if (!isAdmin(viewerId)) {
       return NextResponse.json({ ok: false, error: "forbidden" }, { status: 403 });
     }
 

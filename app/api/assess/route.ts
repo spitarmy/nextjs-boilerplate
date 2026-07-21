@@ -737,7 +737,6 @@ export async function POST(req: NextRequest) {
 
   const assess_mode: AssessMode = (body as any).assess_mode === "bundle" ? "bundle" : "normal";
   const listing_mode: ListingMode = (body as any).listing_mode === "auction" ? "auction" : "flea";
-  const allow_overage: boolean = Boolean((body as any).allow_overage);
 
   // ★ ユーザー補助入力
   const hints: UserHints | null = normalizeHints((body as any).user_hints);

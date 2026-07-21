@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { supabase } from "../../../../lib/supabase";
+import { createSupabaseServerClient } from "../../../../lib/supabaseServer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -21,12 +22,13 @@ function isAdmin(userId: string | null): boolean {
 export async function GET() {
   try {
     // cookieセッション前提：ログインユーザー取得
-    const { data: authData, error: authErr } = await supabase.auth.getUser();
-    if (authErr) {
-      return NextResponse.json({ ok: false, error: authErr.message }, { status: 401 });
-    }
+    let viewerId: string | null = null;
+    try {
+      const supabaseAuth = createSupabaseServerClient();
+      const { data: { user } } = await supabaseAuth.auth.getUser();
+      viewerId = user?.id ?? null;
+    } catch { /* fallback */ }
 
-    const viewerId = authData.user?.id ?? null;
     if (!isAdmin(viewerId)) {
       return NextResponse.json({ ok: false, error: "forbidden" }, { status: 403 });
     }

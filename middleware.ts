@@ -75,7 +75,8 @@ export async function middleware(request: NextRequest) {
     pathname.startsWith("/api/") &&
     !pathname.startsWith("/api/auth/") &&
     !pathname.startsWith("/api/upload-url") &&
-    !pathname.startsWith("/api/assess/worker") // workerは独自認証
+    !pathname.startsWith("/api/assess/worker") && // workerは独自認証
+    !pathname.startsWith("/api/keepalive") // cronは認証不要
   ) {
     if (!user) {
       return NextResponse.json(
