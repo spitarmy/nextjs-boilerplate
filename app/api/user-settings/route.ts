@@ -26,7 +26,7 @@ export async function GET(req: NextRequest) {
 
     const { data, error } = await supabase
       .from("profiles")
-      .select("id,allow_training")
+      .select("id,allow_training,plan")
       .eq("id", user_id)
       .maybeSingle();
 
@@ -36,7 +36,8 @@ export async function GET(req: NextRequest) {
     }
 
     const allow_training = Boolean(data?.allow_training);
-    return NextResponse.json({ ok: true, settings: { allow_training } }, { status: 200 });
+    const plan = data?.plan === "pro" ? "pro" : "light";
+    return NextResponse.json({ ok: true, settings: { allow_training, plan } }, { status: 200 });
   } catch (e: any) {
     console.error("user-settings GET error", e);
     return NextResponse.json({ ok: false, error: e?.message ?? "エラーが発生しました。" }, { status: 500 });

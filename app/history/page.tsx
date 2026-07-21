@@ -18,6 +18,7 @@ export default function HistoryPage() {
   const [items, setItems] = useState<Appraisal[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [userPlan, setUserPlan] = useState<"light" | "pro">("light");
 
   useEffect(() => {
     const fetchData = async () => {
@@ -43,6 +44,18 @@ export default function HistoryPage() {
     };
 
     fetchData();
+
+    // プラン取得
+    (async () => {
+      try {
+        const { data } = await supabase.auth.getUser();
+        const uid = data.user?.id;
+        if (!uid) return;
+        const res = await fetch(`/api/usage?user_id=${encodeURIComponent(uid)}`);
+        const json = await res.json();
+        if (json?.plan) setUserPlan(json.plan);
+      } catch { /* ignore */ }
+    })();
   }, []);
 
   const downloadCSV = () => {
@@ -100,25 +113,37 @@ export default function HistoryPage() {
           <h1 style={{ fontSize: 20, margin: 0 }}>査定履歴</h1>
         </div>
         
-        <button
-          onClick={downloadCSV}
-          disabled={items.length === 0}
-          style={{
-            fontSize: 13,
-            fontWeight: 600,
-            color: "#fff",
-            backgroundColor: items.length === 0 ? "#9ca3af" : "#10b981",
-            border: "none",
-            padding: "8px 16px",
+        {userPlan === "pro" ? (
+          <button
+            onClick={downloadCSV}
+            disabled={items.length === 0}
+            style={{
+              fontSize: 13,
+              fontWeight: 600,
+              color: "#fff",
+              backgroundColor: items.length === 0 ? "#9ca3af" : "#10b981",
+              border: "none",
+              padding: "8px 16px",
+              borderRadius: 6,
+              cursor: items.length === 0 ? "not-allowed" : "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: 6
+            }}
+          >
+            📥 CSV出力
+          </button>
+        ) : (
+          <span style={{
+            fontSize: 11,
+            color: "#9ca3af",
+            background: "#f3f4f6",
+            padding: "6px 12px",
             borderRadius: 6,
-            cursor: items.length === 0 ? "not-allowed" : "pointer",
-            display: "flex",
-            alignItems: "center",
-            gap: 6
-          }}
-        >
-          📥 CSV出力
-        </button>
+          }}>
+            🔒 CSV出力はPRO限定
+          </span>
+        )}
       </div>
 
       {loading && <p>読み込み中...</p>}

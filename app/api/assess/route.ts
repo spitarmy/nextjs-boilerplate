@@ -36,8 +36,16 @@ function sanitizeForFilter(value: string): string {
     .slice(0, 100);              // 長さ制限
 }
 
-const MONTHLY_LIMIT_UNITS = 1500;
-const OVERAGE_FEE_YEN_PER_UNIT = 50; // 1件50円（0.5件なら25円）
+// ===== プラン別上限 =====
+type UserPlan = "light" | "pro";
+const PLAN_LIMITS: Record<UserPlan, number | null> = {
+  light: 100,   // ライト: 月100件
+  pro: null,    // プロ: 無制限
+};
+
+function getPlanLimit(plan: UserPlan): number | null {
+  return PLAN_LIMITS[plan] ?? 100;
+}
 
 function startOfMonthISO(d = new Date()): string {
   const dt = new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 0);
@@ -249,45 +257,35 @@ async function getMonthlyUsageUnits(user_id: string | null): Promise<{ used: num
   return { used: Number(used.toFixed(1)), over: Number(over.toFixed(1)) };
 }
 
-// ===== usage_events を挿入（境界を跨ぐ場合は2行に分割）=====
-async function insertUsageEventSplit(params: {
+// ===== ユーザーのプランを取得 =====
+async function getUserPlan(user_id: string | null): Promise<UserPlan> {
+  if (!user_id) return "light";
+  try {
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("plan")
+      .eq("id", user_id)
+      .maybeSingle();
+    if (error || !data?.plan) return "light";
+    return data.plan === "pro" ? "pro" : "light";
+  } catch {
+    return "light";
+  }
+}
+
+// ===== usage_events を挿入 =====
+async function insertUsageEvent(params: {
   user_id: string | null;
   units: number;
   assess_mode: AssessMode;
   listing_mode: ListingMode | null;
-  allow_overage: boolean;
 }) {
-  const { user_id, units, assess_mode, listing_mode, allow_overage } = params;
+  const { user_id, units, assess_mode, listing_mode } = params;
   if (!user_id) return;
 
-  const nowUsage = await getMonthlyUsageUnits(user_id);
-  const before = nowUsage.used;
-  const after = before + units;
-
-  if (after <= MONTHLY_LIMIT_UNITS) {
-    await supabase.from("usage_events").insert([
-      { user_id, units, kind: "assess", assess_mode, listing_mode, is_overage: false },
-    ]);
-    return;
-  }
-
-  if (!allow_overage) return;
-
-  if (before >= MONTHLY_LIMIT_UNITS) {
-    await supabase.from("usage_events").insert([
-      { user_id, units, kind: "assess", assess_mode, listing_mode, is_overage: true },
-    ]);
-    return;
-  }
-
-  const normalPart = Number((MONTHLY_LIMIT_UNITS - before).toFixed(1));
-  const overPart = Number((units - normalPart).toFixed(1));
-
-  const rows: any[] = [];
-  if (normalPart > 0) rows.push({ user_id, units: normalPart, kind: "assess", assess_mode, listing_mode, is_overage: false });
-  if (overPart > 0) rows.push({ user_id, units: overPart, kind: "assess", assess_mode, listing_mode, is_overage: true });
-
-  if (rows.length) await supabase.from("usage_events").insert(rows);
+  await supabase.from("usage_events").insert([
+    { user_id, units, kind: "assess", assess_mode, listing_mode, is_overage: false },
+  ]);
 }
 
 // ===== ユーザー設定（学習提供） =====
@@ -792,32 +790,36 @@ export async function POST(req: NextRequest) {
 
         sendEvent("progress", { stage: "classify", message: "ジャンル分類中..." });
 
-        const [monthUsage, allow_training, detectedGenre] = await Promise.all([
+        const [monthUsage, allow_training, detectedGenre, userPlan] = await Promise.all([
           getMonthlyUsageUnits(user_id),
           getUserAllowTraining(user_id),
           classifyGenre(openai, images, hints),
+          getUserPlan(user_id),
         ]);
 
+        const planLimit = getPlanLimit(userPlan);
+
         const classifyMs = Date.now() - assessStartTime;
-        console.log(`[KANTENO_ASSESS] classified genre=${detectedGenre} elapsed=${classifyMs}ms`);
+        console.log(`[KANTENO_ASSESS] classified genre=${detectedGenre} plan=${userPlan} elapsed=${classifyMs}ms`);
 
-        // 月次上限チェック
-        const wouldBe = Number((monthUsage.used + units).toFixed(1));
-
-        if (wouldBe > MONTHLY_LIMIT_UNITS && !allow_overage) {
-          sendEvent("error", {
-            ok: false,
-            over_limit: true,
-            required_overage_fee_yen: OVERAGE_FEE_YEN_PER_UNIT,
-            usage: {
-              used_units: monthUsage.used,
-              limit_units: MONTHLY_LIMIT_UNITS,
-              overage_units: monthUsage.over,
-            },
-            error: `今月の上限（${MONTHLY_LIMIT_UNITS}件）に達しました。超過で続行する場合は「1件${OVERAGE_FEE_YEN_PER_UNIT}円」で月末請求になります。`,
-          });
-          controller.close();
-          return;
+        // 月次上限チェック（プロプランは無制限のためスキップ）
+        if (planLimit !== null) {
+          const wouldBe = Number((monthUsage.used + units).toFixed(1));
+          if (wouldBe > planLimit) {
+            sendEvent("error", {
+              ok: false,
+              over_limit: true,
+              plan: userPlan,
+              usage: {
+                used_units: monthUsage.used,
+                limit_units: planLimit,
+                overage_units: 0,
+              },
+              error: `今月の上限（${planLimit}件）に達しました。プロプランへのアップグレードをご検討ください。`,
+            });
+            controller.close();
+            return;
+          }
         }
 
         // ===== Stage 2: リファレンス取得 =====
@@ -920,12 +922,11 @@ export async function POST(req: NextRequest) {
         sendEvent("progress", { stage: "saving", message: "結果を保存中..." });
 
         // usage_events 加算
-        await insertUsageEventSplit({
+        await insertUsageEvent({
           user_id,
           units,
           assess_mode,
           listing_mode: assess_mode === "bundle" ? null : listing_mode,
-          allow_overage,
         });
 
         const updatedUsage = await getMonthlyUsageUnits(user_id);
@@ -944,10 +945,11 @@ export async function POST(req: NextRequest) {
           genre,
           item_name,
           detected_genre: detectedGenre,
+          plan: userPlan,
           usage: {
             used_units: updatedUsage.used,
-            limit_units: MONTHLY_LIMIT_UNITS,
-            overage_units: updatedUsage.over,
+            limit_units: planLimit,
+            overage_units: 0,
           },
           settings: {
             allow_training,

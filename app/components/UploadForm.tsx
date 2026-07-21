@@ -165,9 +165,9 @@ export default function UploadForm() {
   const [listingMode, setListingMode] = useState<ListingMode>("flea");
   const [assessMode, setAssessMode] = useState<AssessMode>("normal");
 
-  const [usage, setUsage] = useState<{ used_units: number; limit_units: number; overage_units: number } | null>(null);
+  const [usage, setUsage] = useState<{ used_units: number; limit_units: number | null; overage_units: number } | null>(null);
 
-  const [allowOverage, setAllowOverage] = useState(false);
+  const [userPlan, setUserPlan] = useState<"light" | "pro">("light");
 
   const [isMobile, setIsMobile] = useState(false);
   const [isAndroid, setIsAndroid] = useState(false);
@@ -201,7 +201,7 @@ export default function UploadForm() {
   const isAuction = listingMode === "auction";
 
   const usagePercent = useMemo(() => {
-    if (!usage) return 0;
+    if (!usage || usage.limit_units === null) return 0; // プロプランは無制限
     const p = (usage.used_units / usage.limit_units) * 100;
     return Math.max(0, Math.min(100, p));
   }, [usage]);
@@ -236,7 +236,10 @@ export default function UploadForm() {
     try {
       const res = await fetch(`/api/usage?user_id=${encodeURIComponent(uid)}`);
       const json = await res.json();
-      if (res.ok && json?.ok) setUsage(json.usage);
+      if (res.ok && json?.ok) {
+        setUsage(json.usage);
+        if (json.plan) setUserPlan(json.plan);
+      }
     } catch {
       // 無視
     }
@@ -300,7 +303,6 @@ export default function UploadForm() {
 
     // 画像が変わったら結果はクリア
     setResult(null);
-    setAllowOverage(false);
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -317,13 +319,11 @@ export default function UploadForm() {
     setFiles([]);
     setResult(null);
     setErrorMsg(null);
-    setAllowOverage(false);
   };
 
   const removeOne = (index: number) => {
     setFiles((prev) => prev.filter((_, i) => i !== index));
     setResult(null);
-    setAllowOverage(false);
   };
 
   const copyToClipboard = async (text: string | null | undefined) => {
@@ -336,7 +336,7 @@ export default function UploadForm() {
     }
   };
 
-  const submitInternal = async (overage: boolean) => {
+  const submitInternal = async () => {
     setErrorMsg(null);
     setResult(null);
     setProgressStage(null);
@@ -400,7 +400,6 @@ export default function UploadForm() {
           user_id: userId,
           listing_mode: listingMode,
           assess_mode: assessMode,
-          allow_overage: overage,
           user_hints: Object.keys(userHints).length ? userHints : null,
         }),
       });
@@ -457,14 +456,12 @@ export default function UploadForm() {
                 const json = data as AssessResponse;
                 if (json?.usage) setUsage(json.usage);
                 setResult(json);
-                setAllowOverage(false);
               } else if (eventType === "error") {
                 const json = data as AssessResponse;
                 if (json?.usage) setUsage(json.usage);
                 if (json?.over_limit) {
                   setResult(json);
                   setErrorMsg(json.error || "今月の上限に達しました。超過で続行する場合は下のボタンを押してください。");
-                  setAllowOverage(true);
                 } else {
                   setErrorMsg(json.error || "査定に失敗しました。時間をおいて再度お試しください。");
                 }
@@ -486,7 +483,6 @@ export default function UploadForm() {
         if (res.status === 402 && json?.over_limit) {
           setResult(json);
           setErrorMsg(json.error || "今月の上限に達しました。超過で続行する場合は下のボタンを押してください。");
-          setAllowOverage(true);
           return;
         }
 
@@ -494,7 +490,6 @@ export default function UploadForm() {
           setErrorMsg(json.error || "査定に失敗しました。時間をおいて再度お試しください。");
         } else {
           setResult(json);
-          setAllowOverage(false);
         }
       }
     } catch (err) {
@@ -508,7 +503,7 @@ export default function UploadForm() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    await submitInternal(false);
+    await submitInternal();
   };
 
   // ★ 追加写真で再査定
@@ -584,7 +579,6 @@ export default function UploadForm() {
           user_id: userId,
           listing_mode: listingMode,
           assess_mode: assessMode,
-          allow_overage: true, // 追加査定は超過許可
           user_hints: mergedHints,
         }),
       });
@@ -708,7 +702,7 @@ export default function UploadForm() {
       >
         <h2 style={{ fontSize: isMobile ? 18 : 20, fontWeight: 700, margin: "0 0 6px" }}>査定する</h2>
 
-        {/* 月次利用数 */}
+        {/* 月次利用数 + プラン */}
         <div
           style={{
             marginBottom: 12,
@@ -719,17 +713,35 @@ export default function UploadForm() {
           }}
         >
           <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
-            <div style={{ fontSize: 12, fontWeight: 700 }}>今月の利用数</div>
+            <div style={{ fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{
+                backgroundColor: userPlan === "pro" ? "rgba(147,51,234,0.25)" : "rgba(37,99,235,0.25)",
+                color: userPlan === "pro" ? "#c4b5fd" : "#93c5fd",
+                padding: "2px 8px",
+                borderRadius: 4,
+                fontSize: 10,
+                fontWeight: 700,
+              }}>
+                {userPlan === "pro" ? "PRO" : "LIGHT"}
+              </span>
+              今月の利用数
+            </div>
             <div style={{ fontSize: 12, color: "#cbd5f5" }}>
-              {usage ? `${usage.used_units} / ${usage.limit_units}` : "読み込み中…"}
+              {usage
+                ? userPlan === "pro"
+                  ? `${usage.used_units} 件（使い放題）`
+                  : `${usage.used_units} / ${usage.limit_units}`
+                : "読み込み中…"}
             </div>
           </div>
-          <div style={{ marginTop: 8, height: 8, borderRadius: 999, background: "rgba(148,163,184,0.25)", overflow: "hidden" }}>
-            <div style={{ width: `${usagePercent}%`, height: "100%", background: "linear-gradient(to right, rgba(37,99,235,0.7), rgba(79,70,229,0.7))" }} />
-          </div>
-          {usage && usage.overage_units > 0 && (
+          {userPlan === "light" && (
+            <div style={{ marginTop: 8, height: 8, borderRadius: 999, background: "rgba(148,163,184,0.25)", overflow: "hidden" }}>
+              <div style={{ width: `${usagePercent}%`, height: "100%", background: usagePercent >= 90 ? "linear-gradient(to right, #ef4444, #dc2626)" : "linear-gradient(to right, rgba(37,99,235,0.7), rgba(79,70,229,0.7))" }} />
+            </div>
+          )}
+          {userPlan === "light" && usage && usage.limit_units !== null && usage.used_units >= usage.limit_units && (
             <div style={{ marginTop: 6, fontSize: 11, color: "#fca5a5" }}>
-              超過分: {usage.overage_units} 件（※月末請求対象）
+              ⚠️ 今月の上限に達しました。プロプランへのアップグレードをご検討ください。
             </div>
           )}
         </div>
@@ -1122,27 +1134,7 @@ export default function UploadForm() {
             {loading ? "処理中..." : "AI査定を開始する"}
           </button>
 
-          {allowOverage && (
-            <button
-              type="button"
-              onClick={() => submitInternal(true)}
-              disabled={loading}
-              style={{
-                marginTop: 10,
-                width: "100%",
-                padding: "10px 16px",
-                borderRadius: 999,
-                border: "1px solid rgba(248,113,113,0.75)",
-                background: "rgba(127,29,29,0.25)",
-                color: "#fecaca",
-                fontSize: 14,
-                fontWeight: 700,
-                cursor: loading ? "default" : "pointer",
-              }}
-            >
-              超過で続行（1件50円・月末請求）
-            </button>
-          )}
+
 
           {/* ★ AI思考プロセス可視化UI */}
           {loading && (

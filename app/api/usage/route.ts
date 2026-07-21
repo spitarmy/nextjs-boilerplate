@@ -5,7 +5,11 @@ import { createSupabaseServerClient } from "../../../lib/supabaseServer";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const MONTHLY_LIMIT_UNITS = 1500;
+type UserPlan = "light" | "pro";
+const PLAN_LIMITS: Record<UserPlan, number | null> = {
+  light: 100,
+  pro: null,
+};
 
 function startOfMonthISO(d = new Date()): string {
   const dt = new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 0);
@@ -32,6 +36,19 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ ok: false, error: "user_id がありません。" }, { status: 400 });
     }
 
+    // プランを取得
+    let plan: UserPlan = "light";
+    try {
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("plan")
+        .eq("id", user_id)
+        .maybeSingle();
+      if (profile?.plan === "pro") plan = "pro";
+    } catch { /* default to light */ }
+
+    const planLimit = PLAN_LIMITS[plan];
+
     const from = startOfMonthISO();
 
     const { data, error } = await supabase
@@ -46,20 +63,18 @@ export async function GET(req: NextRequest) {
     }
 
     let used = 0;
-    let over = 0;
     for (const r of data ?? []) {
-      const u = Number(r.units ?? 0);
-      used += u;
-      if (r.is_overage) over += u;
+      used += Number(r.units ?? 0);
     }
 
     return NextResponse.json(
       {
         ok: true,
+        plan,
         usage: {
           used_units: Number(used.toFixed(1)),
-          limit_units: MONTHLY_LIMIT_UNITS,
-          overage_units: Number(over.toFixed(1)),
+          limit_units: planLimit,
+          overage_units: 0,
         },
       },
       { status: 200 }
