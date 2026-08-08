@@ -372,23 +372,19 @@ export default function UploadForm() {
     setProgressStage("画像をアップロード中...");
 
     try {
-      const imageUrls: string[] = [];
-
       const maxSide = getMaxLongSide(files.length);
+      setProgressStage(`画像をアップロード中... (${files.length}枚)`);
 
-      for (let i = 0; i < files.length; i++) {
-        setProgressStage(`画像をアップロード中... (${i + 1}/${files.length})`);
+      // 全画像を並列アップロード（大幅な速度改善）
+      const uploadPromises = files.map(async (file) => {
         try {
-          // 署名URL方式でアップロード
-          const publicUrl = await uploadImageToStorage(files[i], maxSide);
-          imageUrls.push(publicUrl);
+          return await uploadImageToStorage(file, maxSide);
         } catch (uploadErr) {
-          // フォールバック: 署名URL失敗時はdata URLで送信
           console.warn("署名URLアップロード失敗、data URLで代替:", uploadErr);
-          const dataUrl = await fileToCompressedDataUrl(files[i], maxSide);
-          imageUrls.push(dataUrl);
+          return await fileToCompressedDataUrl(file, maxSide);
         }
-      }
+      });
+      const imageUrls = await Promise.all(uploadPromises);
 
       // ★ 空文字は送らない（API側でnull扱いしやすく）
       const userHints: UserHints = {};
