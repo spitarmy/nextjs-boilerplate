@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
-import { supabase } from "../../../lib/supabase";
+import { supabaseAdmin } from "../../../lib/supabaseAdmin";
 import { createSupabaseServerClient } from "../../../lib/supabaseServer";
 import { checkRateLimit } from "../../../lib/rateLimit";
 
@@ -235,7 +235,7 @@ async function getMonthlyUsageUnits(user_id: string | null): Promise<{ used: num
   const from = startOfMonthISO();
 
   // 全件取得ではなく、必要な列だけ取得し集計
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from("usage_events")
     .select("units,is_overage")
     .eq("user_id", user_id)
@@ -261,7 +261,7 @@ async function getMonthlyUsageUnits(user_id: string | null): Promise<{ used: num
 async function getUserPlan(user_id: string | null): Promise<UserPlan> {
   if (!user_id) return "light";
   try {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from("profiles")
       .select("plan")
       .eq("id", user_id)
@@ -283,7 +283,7 @@ async function insertUsageEvent(params: {
   const { user_id, units, assess_mode, listing_mode } = params;
   if (!user_id) return;
 
-  await supabase.from("usage_events").insert([
+  await supabaseAdmin.from("usage_events").insert([
     { user_id, units, kind: "assess", assess_mode, listing_mode, is_overage: false },
   ]);
 }
@@ -292,7 +292,7 @@ async function insertUsageEvent(params: {
 async function getUserAllowTraining(user_id: string | null): Promise<boolean> {
   if (!user_id) return false;
   try {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from("profiles")
       .select("allow_training")
       .eq("id", user_id)
@@ -393,7 +393,7 @@ async function loadReferencesForGenre(
     // ★ watch/jewelry もブランド品が多いため brand_data を併せて取得
     if (genre === "brand_bag" || genre === "watch" || genre === "jewelry" || genre === "other") {
       // 案G: hints の型番/ブランド名/商品名でフィルタ
-      let query = supabase.from("brand_data_reference_v2").select("brand,line_name,model_name");
+      let query = supabaseAdmin.from("brand_data_reference_v2").select("brand,line_name,model_name");
 
       // ヒントがある場合、OR条件で絞り込み（関連性の高いリファレンスを優先取得）
       const brandFilters: string[] = [];
@@ -415,7 +415,7 @@ async function loadReferencesForGenre(
     }
 
     if (genre === "jewelry" || genre === "other") {
-      const { data: jewelryRows } = await supabase.from("jewelry_reference").select("*").limit(15);
+      const { data: jewelryRows } = await supabaseAdmin.from("jewelry_reference").select("*").limit(15);
       if (jewelryRows?.length) {
         blocks.push("[ジュエリー系リファレンス]\n" + jewelryRows.map((r: any) => JSON.stringify(r)).join("\n"));
       }
@@ -423,7 +423,7 @@ async function loadReferencesForGenre(
 
     if (genre === "kinko_urushi" || genre === "wamon" || genre === "other") {
       // 金工・漆器は和物と関連が深いため、wamon と kinko_urushi を相互に取得
-      const { data: kinkoRows } = await supabase.from("kinko_urushi_reference").select("*").limit(15);
+      const { data: kinkoRows } = await supabaseAdmin.from("kinko_urushi_reference").select("*").limit(15);
       if (kinkoRows?.length) {
         blocks.push("[金工・漆器系リファレンス]\n" + kinkoRows.map((r: any) => JSON.stringify(r)).join("\n"));
       }
@@ -431,7 +431,7 @@ async function loadReferencesForGenre(
 
     if (genre === "wamon" || genre === "kinko_urushi" || genre === "other") {
       // 案G: 作家名・署名・落款でフィルタ
-      let query = supabase
+      let query = supabaseAdmin
         .from("wamon_reference")
         .select(
           "genre,category,author_name,style_traits,stroke_traits,signature_traits,seal_text,seal_shape_color,seal_position,authenticity_points,common_fake_patterns,era,school_lineage"
@@ -462,7 +462,7 @@ async function loadReferencesForGenre(
     }
 
     // 教師データはジャンルでフィルタ（genre が "other" の場合は全ジャンル）
-    let trainingQuery = supabase
+    let trainingQuery = supabaseAdmin
       .from("training_items")
       .select("genre,item_name,output_text,confidence")
       .eq("is_trainable", true)
@@ -963,7 +963,7 @@ export async function POST(req: NextRequest) {
         savePromises.push(
           (async () => {
             try {
-              await supabase.from("appraisals").insert([
+              await supabaseAdmin.from("appraisals").insert([
                 {
                   user_id,
                   genre,
@@ -989,7 +989,7 @@ export async function POST(req: NextRequest) {
           savePromises.push(
             (async () => {
               try {
-                await supabase.from("training_items").insert([
+                await supabaseAdmin.from("training_items").insert([
                   {
                     genre,
                     item_name,
@@ -1017,7 +1017,7 @@ export async function POST(req: NextRequest) {
         savePromises.push(
           (async () => {
             try {
-              await supabase.from("assessment_jobs").insert([
+              await supabaseAdmin.from("assessment_jobs").insert([
                 {
                   user_id,
                   image_urls: images,

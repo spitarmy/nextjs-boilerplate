@@ -1,6 +1,6 @@
 // app/api/assess/result/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { supabase } from "../../../../lib/supabase";
+import { supabaseAdmin } from "../../../../lib/supabaseAdmin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,7 +16,7 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const { data: job, error } = await supabase
+    const { data: job, error } = await supabaseAdmin
       .from("assessment_jobs")
       .select("status, result, error_message")
       .eq("id", job_id)

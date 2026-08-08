@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabase } from "../../../lib/supabase";
+import { supabaseAdmin } from "../../../lib/supabaseAdmin";
 import { createSupabaseServerClient } from "../../../lib/supabaseServer";
 
 export const runtime = "nodejs";
@@ -39,7 +39,7 @@ export async function GET(req: NextRequest) {
     // プランを取得
     let plan: UserPlan = "light";
     try {
-      const { data: profile } = await supabase
+      const { data: profile } = await supabaseAdmin
         .from("profiles")
         .select("plan")
         .eq("id", user_id)
@@ -51,7 +51,7 @@ export async function GET(req: NextRequest) {
 
     const from = startOfMonthISO();
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from("usage_events")
       .select("units,is_overage,created_at")
       .eq("user_id", user_id)

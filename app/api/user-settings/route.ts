@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabase } from "../../../lib/supabase";
+import { supabaseAdmin } from "../../../lib/supabaseAdmin";
 import { createSupabaseServerClient } from "../../../lib/supabaseServer";
 
 export const runtime = "nodejs";
@@ -24,7 +24,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ ok: false, error: "user_id がありません。" }, { status: 400 });
     }
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from("profiles")
       .select("id,allow_training,plan")
       .eq("id", user_id)
@@ -61,7 +61,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: "user_id がありません。" }, { status: 400 });
     }
 
-    const { error } = await supabase
+    const { error } = await supabaseAdmin
       .from("profiles")
       .upsert([{ id: user_id, allow_training }], { onConflict: "id" });
 

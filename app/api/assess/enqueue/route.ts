@@ -1,6 +1,6 @@
 // app/api/assess/enqueue/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { supabase } from "../../../../lib/supabase";
+import { supabaseAdmin } from "../../../../lib/supabaseAdmin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
     }
 
     // assessment_jobs に「pending ジョブ」として登録
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from("assessment_jobs")
       .insert({
         user_id,

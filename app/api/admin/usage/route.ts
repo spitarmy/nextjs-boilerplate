@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { supabase } from "../../../../lib/supabase";
+import { supabaseAdmin } from "../../../../lib/supabaseAdmin";
 import { createSupabaseServerClient } from "../../../../lib/supabaseServer";
 
 export const runtime = "nodejs";
@@ -35,7 +35,7 @@ export async function GET() {
 
     const from = startOfMonthISO();
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from("usage_events")
       .select("user_id, units, is_overage, assess_mode, listing_mode, created_at")
       .gte("created_at", from)

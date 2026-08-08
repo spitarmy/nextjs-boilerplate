@@ -1,7 +1,7 @@
 // app/api/assess/worker/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
-import { supabase } from "../../../../lib/supabase";
+import { supabaseAdmin } from "../../../../lib/supabaseAdmin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -132,7 +132,7 @@ async function loadReferencesForGenre(genre: GenreCategory): Promise<string> {
   try {
     // watch/jewelry もブランド品が多いため brand_data を併せて取得
     if (genre === "brand_bag" || genre === "watch" || genre === "jewelry" || genre === "other") {
-      const { data: brandRows } = await supabase
+      const { data: brandRows } = await supabaseAdmin
         .from("brand_data_reference_v2")
         .select("brand,line_name,model_name")
         .limit(15);
@@ -145,7 +145,7 @@ async function loadReferencesForGenre(genre: GenreCategory): Promise<string> {
     }
 
     if (genre === "jewelry" || genre === "other") {
-      const { data: jewelryRows } = await supabase.from("jewelry_reference").select("*").limit(15);
+      const { data: jewelryRows } = await supabaseAdmin.from("jewelry_reference").select("*").limit(15);
       if (jewelryRows?.length) {
         blocks.push("[ジュエリー系リファレンス]\n" + jewelryRows.map((r) => JSON.stringify(r)).join("\n"));
       }
@@ -153,14 +153,14 @@ async function loadReferencesForGenre(genre: GenreCategory): Promise<string> {
 
     if (genre === "kinko_urushi" || genre === "wamon" || genre === "other") {
       // 金工・漆器は和物と関連が深いため相互取得
-      const { data: kinkoRows } = await supabase.from("kinko_urushi_reference").select("*").limit(15);
+      const { data: kinkoRows } = await supabaseAdmin.from("kinko_urushi_reference").select("*").limit(15);
       if (kinkoRows?.length) {
         blocks.push("[金工・漆器系リファレンス]\n" + kinkoRows.map((r) => JSON.stringify(r)).join("\n"));
       }
     }
 
     if (genre === "wamon" || genre === "kinko_urushi" || genre === "other") {
-      const { data: wamonRows } = await supabase
+      const { data: wamonRows } = await supabaseAdmin
         .from("wamon_reference")
         .select(
           "genre,category,author_name,style_traits,stroke_traits,signature_traits,seal_text,seal_shape_color,seal_position,authenticity_points,common_fake_patterns,era,school_lineage"
@@ -180,7 +180,7 @@ async function loadReferencesForGenre(genre: GenreCategory): Promise<string> {
     }
 
     // 教師データ（ジャンルでフィルタ）
-    let trainingQuery = supabase
+    let trainingQuery = supabaseAdmin
       .from("training_items")
       .select("genre,item_name,output_text,confidence")
       .eq("is_trainable", true)
@@ -325,7 +325,7 @@ export async function GET(req: NextRequest) {
 
   try {
     // 1. pending ジョブを最大 3 件だけ取得
-    const { data: jobs } = await supabase
+    const { data: jobs } = await supabaseAdmin
       .from("assessment_jobs")
       .select("*")
       .eq("status", "pending")
@@ -341,13 +341,13 @@ export async function GET(req: NextRequest) {
     for (const job of jobs) {
       try {
         // 2. processing にする
-        await supabase.from("assessment_jobs").update({ status: "processing" }).eq("id", job.id);
+        await supabaseAdmin.from("assessment_jobs").update({ status: "processing" }).eq("id", job.id);
 
         // 3. 査定実行
         const result = await processJob(job);
 
         // 4. DB 更新
-        await supabase
+        await supabaseAdmin
           .from("assessment_jobs")
           .update({
             status: "done",
@@ -360,7 +360,7 @@ export async function GET(req: NextRequest) {
       } catch (err: any) {
         console.error("Job failed", job.id, err);
 
-        await supabase
+        await supabaseAdmin
           .from("assessment_jobs")
           .update({
             status: "error",
