@@ -12,19 +12,17 @@ export async function GET(request: Request) {
   }
 
   // まずテーブルが既に存在するか確認
-  const { data, error: checkErr } = await supabaseAdmin
+  const { error: checkErr } = await supabaseAdmin
     .from("purchase_ledger")
     .select("id")
     .limit(1);
 
   if (!checkErr) {
-    return NextResponse.json({ ok: true, message: "purchase_ledger テーブルは既に存在します", rows: data?.length ?? 0 });
+    return NextResponse.json({ ok: true, message: "purchase_ledger テーブルは既に存在します" });
   }
 
-  // テーブルが存在しない場合 → Supabase Management APIでSQL実行を試行
+  // テーブルが存在しない → Supabase SQL HTTP APIで作成
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-  // URLからproject refを抽出 (e.g. https://xxxxx.supabase.co → xxxxx)
-  const projectRef = supabaseUrl.replace("https://", "").split(".")[0];
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
   const sql = `
@@ -42,37 +40,80 @@ CREATE TABLE IF NOT EXISTS purchase_ledger (
   id_verification TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+ALTER TABLE purchase_ledger ENABLE ROW LEVEL SECURITY;
+CREATE POLICY IF NOT EXISTS "service_role_all" ON purchase_ledger FOR ALL USING (true) WITH CHECK (true);
   `;
 
+  const results: string[] = [];
+
+  // 方法1: Supabase SQL API (/pg/query) を試行
   try {
-    // Supabase SQL API endpoint (service_role key で認証)
-    const sqlRes = await fetch(`${supabaseUrl}/rest/v1/rpc/`, {
+    const pgRes = await fetch(`${supabaseUrl}/pg/query`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "apikey": serviceRoleKey,
         "Authorization": `Bearer ${serviceRoleKey}`,
       },
-      body: JSON.stringify({ name: "exec_sql", args: { query: sql } }),
+      body: JSON.stringify({ query: sql }),
     });
-
-    if (sqlRes.ok) {
-      return NextResponse.json({ ok: true, message: "テーブル作成成功" });
+    if (pgRes.ok) {
+      results.push("pg/query: テーブル作成成功");
+      return NextResponse.json({ ok: true, results });
     }
-
-    // RPCが使えない場合は手動SQL実行の案内を返す
-    return NextResponse.json({
-      ok: false,
-      error: "自動テーブル作成ができませんでした",
-      manual_sql: sql.trim(),
-      instructions: "Supabase SQL Editor で上記SQLを実行してください",
-    });
+    const pgText = await pgRes.text();
+    results.push(`pg/query: ${pgRes.status} - ${pgText.slice(0, 200)}`);
   } catch (e: any) {
-    return NextResponse.json({
-      ok: false,
-      error: e?.message ?? "migration error",
-      manual_sql: sql.trim(),
-      instructions: "Supabase SQL Editor で上記SQLを実行してください",
-    });
+    results.push(`pg/query: error - ${e?.message}`);
   }
+
+  // 方法2: Supabase REST SQL endpoint を試行
+  try {
+    const sqlRes = await fetch(`${supabaseUrl}/rest/v1/rpc/exec_sql`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": serviceRoleKey,
+        "Authorization": `Bearer ${serviceRoleKey}`,
+        "Prefer": "return=representation",
+      },
+      body: JSON.stringify({ query: sql }),
+    });
+    if (sqlRes.ok) {
+      results.push("rpc/exec_sql: テーブル作成成功");
+      return NextResponse.json({ ok: true, results });
+    }
+    const sqlText = await sqlRes.text();
+    results.push(`rpc/exec_sql: ${sqlRes.status} - ${sqlText.slice(0, 200)}`);
+  } catch (e: any) {
+    results.push(`rpc/exec_sql: error - ${e?.message}`);
+  }
+
+  // 方法3: Supabase Management API を試行
+  const projectRef = supabaseUrl.replace("https://", "").split(".")[0];
+  try {
+    const mgmtRes = await fetch(`https://api.supabase.com/v1/projects/${projectRef}/database/query`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${serviceRoleKey}`,
+      },
+      body: JSON.stringify({ query: sql }),
+    });
+    if (mgmtRes.ok) {
+      results.push("management API: テーブル作成成功");
+      return NextResponse.json({ ok: true, results });
+    }
+    const mgmtText = await mgmtRes.text();
+    results.push(`management API: ${mgmtRes.status} - ${mgmtText.slice(0, 200)}`);
+  } catch (e: any) {
+    results.push(`management API: error - ${e?.message}`);
+  }
+
+  return NextResponse.json({
+    ok: false,
+    error: "自動テーブル作成ができませんでした",
+    attempts: results,
+    manual_sql: sql.trim(),
+  });
 }
