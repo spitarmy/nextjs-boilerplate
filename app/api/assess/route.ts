@@ -739,7 +739,12 @@ export async function POST(req: NextRequest) {
   const listing_mode: ListingMode = (body as any).listing_mode === "auction" ? "auction" : "flea";
 
   // ★ ユーザー補助入力
-  const hints: UserHints | null = normalizeHints((body as any).user_hints);
+  let hints: UserHints | null = normalizeHints((body as any).user_hints);
+  const has_seal_closeup = (body as any).has_seal_closeup === true;
+  if (has_seal_closeup) {
+    if (!hints) hints = {};
+    hints.notes = ((hints.notes || "") + "\n※クローズアップ画像（最後の1枚）を特に注視して査定してください。").trim();
+  }
   const hintsText = formatHintsForPrompt(hints);
 
   // units（まとめ査定は 0.5）

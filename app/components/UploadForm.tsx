@@ -54,6 +54,7 @@ type AssessResponse = {
   };
 
   error?: string;
+  appraisal_id?: string;
 };
 
 // ★ 5枚
@@ -197,6 +198,19 @@ export default function UploadForm() {
   const [additionalFiles, setAdditionalFiles] = useState<File[]>([]);
   const [additionalLoading, setAdditionalLoading] = useState(false);
   const additionalPickerRef = useRef<HTMLInputElement | null>(null);
+
+  // ★ Task 2: Seal/Signature upload states
+  const [sealFile, setSealFile] = useState<File | null>(null);
+  const [sealExpanded, setSealExpanded] = useState(false);
+
+  // ★ Task 1: Purchase form states
+  const [showPurchaseForm, setShowPurchaseForm] = useState(false);
+  const [purchasePrice, setPurchasePrice] = useState("");
+  const [sellerName, setSellerName] = useState("");
+  const [sellerAddress, setSellerAddress] = useState("");
+  const [idVerification, setIdVerification] = useState("");
+  const [purchaseLoading, setPurchaseLoading] = useState(false);
+  const [purchaseSuccess, setPurchaseSuccess] = useState(false);
 
   // ★ モバイルで「写真選択」「その場で撮影」を出すための hidden input
   const pickerRef = useRef<HTMLInputElement | null>(null);
@@ -386,6 +400,17 @@ export default function UploadForm() {
       });
       const imageUrls = await Promise.all(uploadPromises);
 
+      if (sealFile) {
+        setProgressStage(`クローズアップ写真をアップロード中...`);
+        try {
+          const sealUrl = await uploadImageToStorage(sealFile, 1024);
+          imageUrls.push(sealUrl);
+        } catch (uploadErr) {
+          const sealDataUrl = await fileToCompressedDataUrl(sealFile, 1024);
+          imageUrls.push(sealDataUrl);
+        }
+      }
+
       // ★ 空文字は送らない（API側でnull扱いしやすく）
       const userHints: UserHints = {};
       (Object.keys(hints) as (keyof UserHints)[]).forEach((k) => {
@@ -404,6 +429,7 @@ export default function UploadForm() {
           listing_mode: listingMode,
           assess_mode: assessMode,
           user_hints: Object.keys(userHints).length ? userHints : null,
+          has_seal_closeup: !!sealFile,
         }),
       });
 
@@ -1117,6 +1143,57 @@ export default function UploadForm() {
             </div>
           )}
 
+          {/* ★ Task 2: 落款・刻印・サインのクローズアップ（任意） */}
+          <div
+            style={{
+              marginBottom: 16,
+              padding: 14,
+              borderRadius: 14,
+              border: "1px dashed rgba(148,163,184,0.7)",
+              backgroundColor: "rgba(15,23,42,0.96)",
+            }}
+          >
+            <div 
+              style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}
+              onClick={() => setSealExpanded(!sealExpanded)}
+            >
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#e5e7eb" }}>🔍 落款・刻印・サインのクローズアップ（任意）</div>
+              <div style={{ color: "#9ca3af", fontSize: 18 }}>{sealExpanded ? "▲" : "▼"}</div>
+            </div>
+            
+            {sealExpanded && (
+              <div style={{ marginTop: 12 }}>
+                <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 10, lineHeight: 1.6 }}>
+                  落款や刻印がある場合、その部分だけを大きく撮影した写真を追加すると精度が上がります
+                </div>
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => {
+                    if (e.target.files && e.target.files.length > 0) {
+                      setSealFile(e.target.files[0]);
+                    }
+                  }}
+                  style={{ fontSize: 13, color: "#e5e7eb" }}
+                />
+                {sealFile && (
+                  <div style={{ marginTop: 8, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                    <div style={{ fontSize: 12, color: "#e5e7eb" }}>
+                      {sealFile.name}（{Math.round(sealFile.size / 1024)} KB）
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setSealFile(null)}
+                      style={dangerBtn}
+                    >
+                      削除
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
           <button
             type="submit"
             disabled={loading || files.length === 0}
@@ -1252,6 +1329,124 @@ export default function UploadForm() {
                 <span>{"　"}型名: {result.item_name ?? "不明"}</span>
                 <span>{"　"}モード: {result.assess_mode === "bundle" ? "まとめ査定" : isAuction ? "オークション" : "フリマ"}</span>
               </div>
+            </section>
+
+            {/* Task 1 Purchase feature */}
+            <section
+              style={{
+                padding: isMobile ? 14 : 16,
+                borderRadius: 16,
+                background: "radial-gradient(circle at top left, rgba(20,83,45,0.15), #0f172a)",
+                border: "1px solid rgba(74,222,128,0.4)",
+                color: "#e5e7eb",
+              }}
+            >
+              {!showPurchaseForm && !purchaseSuccess && (
+                <button
+                  type="button"
+                  onClick={() => setShowPurchaseForm(true)}
+                  style={{
+                    width: "100%",
+                    padding: "12px 16px",
+                    borderRadius: 12,
+                    border: "none",
+                    background: "linear-gradient(to right, #16a34a, #15803d)",
+                    color: "#fff",
+                    fontSize: 14,
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    boxShadow: "0 4px 12px rgba(22,163,74,0.3)",
+                  }}
+                >
+                  📦 この商品を購入する
+                </button>
+              )}
+              
+              {purchaseSuccess && (
+                <div style={{ textAlign: "center", color: "#4ade80", fontWeight: 700, fontSize: 14 }}>
+                  ✅ 古物台帳に登録しました
+                </div>
+              )}
+
+              {showPurchaseForm && !purchaseSuccess && (
+                <div style={{ display: "grid", gap: 10, marginTop: 8 }}>
+                  <h3 style={{ margin: "0 0 4px", fontSize: 14, fontWeight: 700, color: "#4ade80" }}>📦 古物台帳に登録</h3>
+                  <div>
+                    <div style={labelStyle}>買取金額 (必須)</div>
+                    <input type="number" required value={purchasePrice} onChange={(e) => setPurchasePrice(e.target.value)} placeholder="例: 5000" style={inputStyle} />
+                  </div>
+                  <div>
+                    <div style={labelStyle}>相手方氏名 (任意)</div>
+                    <input value={sellerName} onChange={(e) => setSellerName(e.target.value)} placeholder="例: 山田 太郎" style={inputStyle} />
+                  </div>
+                  <div>
+                    <div style={labelStyle}>相手方住所 (任意)</div>
+                    <input value={sellerAddress} onChange={(e) => setSellerAddress(e.target.value)} placeholder="例: 東京都..." style={inputStyle} />
+                  </div>
+                  <div>
+                    <div style={labelStyle}>本人確認方法 (任意)</div>
+                    <select value={idVerification} onChange={(e) => setIdVerification(e.target.value)} style={inputStyle}>
+                      <option value="">選択してください</option>
+                      <option value="免許証">免許証</option>
+                      <option value="パスポート">パスポート</option>
+                      <option value="マイナンバーカード">マイナンバーカード</option>
+                      <option value="保険証">保険証</option>
+                      <option value="その他">その他</option>
+                    </select>
+                  </div>
+                  <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
+                    <button
+                      type="button"
+                      disabled={purchaseLoading || !purchasePrice}
+                      onClick={async () => {
+                        setPurchaseLoading(true);
+                        try {
+                          const res = await fetch("/api/ledger", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                              appraisal_id: result.appraisal_id ?? null,
+                              item_name: result.item_name ?? "不明",
+                              item_description: result.output_text?.slice(0, 200) ?? "",
+                              purchase_price: Number(purchasePrice),
+                              seller_name: sellerName || null,
+                              seller_address: sellerAddress || null,
+                              id_verification: idVerification || null,
+                            })
+                          });
+                          if (res.ok) {
+                            setPurchaseSuccess(true);
+                            setShowPurchaseForm(false);
+                          } else {
+                            alert("エラーが発生しました");
+                          }
+                        } catch(e) {
+                          alert("通信エラー");
+                        } finally {
+                          setPurchaseLoading(false);
+                        }
+                      }}
+                      style={{
+                        flex: 1, padding: "10px", borderRadius: "8px", border: "none",
+                        background: purchaseLoading || !purchasePrice ? "#4b5563" : "#22c55e",
+                        color: "#fff", fontWeight: 700, cursor: purchaseLoading || !purchasePrice ? "default" : "pointer"
+                      }}
+                    >
+                      {purchaseLoading ? "登録中..." : "台帳に登録"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowPurchaseForm(false)}
+                      style={{
+                        flex: 1, padding: "10px", borderRadius: "8px", border: "1px solid #4b5563",
+                        background: "transparent", color: "#fff", fontWeight: 700, cursor: "pointer"
+                      }}
+                    >
+                      キャンセル
+                    </button>
+                  </div>
+                </div>
+              )}
             </section>
 
             {/* ★ 追加写真で再査定（信頼度60-79% = 要追加写真） */}
