@@ -20,6 +20,15 @@ export default function HistoryPage() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [userPlan, setUserPlan] = useState<"light" | "pro">("light");
 
+  // 購入フォーム用state
+  const [purchaseTarget, setPurchaseTarget] = useState<string | null>(null); // appraisal.id
+  const [purchasePrice, setPurchasePrice] = useState("");
+  const [sellerName, setSellerName] = useState("");
+  const [sellerAddress, setSellerAddress] = useState("");
+  const [idVerification, setIdVerification] = useState("");
+  const [purchaseLoading, setPurchaseLoading] = useState(false);
+  const [purchaseSuccess, setPurchaseSuccess] = useState<string | null>(null);
+
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
@@ -87,6 +96,44 @@ export default function HistoryPage() {
     URL.revokeObjectURL(url);
   };
 
+  const handlePurchaseSubmit = async (appraisal: Appraisal) => {
+    if (!purchasePrice || isNaN(Number(purchasePrice))) {
+      alert("買取金額を入力してください");
+      return;
+    }
+    setPurchaseLoading(true);
+    try {
+      const res = await fetch("/api/ledger", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          appraisal_id: appraisal.id,
+          item_name: appraisal.item_name || appraisal.mercari_title || "不明",
+          item_description: (appraisal.output_text || "").slice(0, 200),
+          purchase_price: Number(purchasePrice),
+          seller_name: sellerName || null,
+          seller_address: sellerAddress || null,
+          id_verification: idVerification || null,
+        }),
+      });
+      const json = await res.json();
+      if (json.ok) {
+        setPurchaseSuccess(appraisal.id);
+        setPurchaseTarget(null);
+        setPurchasePrice("");
+        setSellerName("");
+        setSellerAddress("");
+        setIdVerification("");
+      } else {
+        alert("登録に失敗しました: " + (json.error || "不明なエラー"));
+      }
+    } catch (e: any) {
+      alert("エラー: " + (e?.message || "通信エラー"));
+    } finally {
+      setPurchaseLoading(false);
+    }
+  };
+
   return (
     <div style={{ maxWidth: 900, margin: "0 auto", padding: "16px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
@@ -113,37 +160,55 @@ export default function HistoryPage() {
           <h1 style={{ fontSize: 20, margin: 0 }}>査定履歴</h1>
         </div>
         
-        {userPlan === "pro" ? (
-          <button
-            onClick={downloadCSV}
-            disabled={items.length === 0}
-            style={{
-              fontSize: 13,
-              fontWeight: 600,
-              color: "#fff",
-              backgroundColor: items.length === 0 ? "#9ca3af" : "#10b981",
-              border: "none",
-              padding: "8px 16px",
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {userPlan === "pro" && (
+            <a
+              href="/ledger"
+              style={{
+                fontSize: 13,
+                fontWeight: 600,
+                color: "#4f46e5",
+                textDecoration: "none",
+                background: "#e0e7ff",
+                padding: "8px 12px",
+                borderRadius: 6,
+              }}
+            >
+              📋 古物台帳
+            </a>
+          )}
+          {userPlan === "pro" ? (
+            <button
+              onClick={downloadCSV}
+              disabled={items.length === 0}
+              style={{
+                fontSize: 13,
+                fontWeight: 600,
+                color: "#fff",
+                backgroundColor: items.length === 0 ? "#9ca3af" : "#10b981",
+                border: "none",
+                padding: "8px 16px",
+                borderRadius: 6,
+                cursor: items.length === 0 ? "not-allowed" : "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: 6
+              }}
+            >
+              📥 CSV出力
+            </button>
+          ) : (
+            <span style={{
+              fontSize: 11,
+              color: "#9ca3af",
+              background: "#f3f4f6",
+              padding: "6px 12px",
               borderRadius: 6,
-              cursor: items.length === 0 ? "not-allowed" : "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: 6
-            }}
-          >
-            📥 CSV出力
-          </button>
-        ) : (
-          <span style={{
-            fontSize: 11,
-            color: "#9ca3af",
-            background: "#f3f4f6",
-            padding: "6px 12px",
-            borderRadius: 6,
-          }}>
-            🔒 CSV出力はPRO限定
-          </span>
-        )}
+            }}>
+              🔒 CSV・台帳はPRO限定
+            </span>
+          )}
+        </div>
       </div>
 
       {loading && <p>読み込み中...</p>}
@@ -242,10 +307,158 @@ export default function HistoryPage() {
                 style={{
                   fontSize: 12,
                   whiteSpace: "pre-wrap",
+                  marginBottom: 8,
                 }}
               >
                 {a.output_text}
               </div>
+            )}
+
+            {/* 購入ボタン（プロプランのみ） */}
+            {userPlan === "pro" && (
+              <>
+                {purchaseSuccess === a.id ? (
+                  <div style={{ fontSize: 13, color: "#059669", fontWeight: 600, padding: "6px 0" }}>
+                    ✅ 古物台帳に登録しました
+                  </div>
+                ) : purchaseTarget === a.id ? (
+                  <div style={{
+                    background: "#f0fdf4",
+                    border: "1px solid #86efac",
+                    borderRadius: 8,
+                    padding: 12,
+                    marginTop: 4,
+                  }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: "#166534" }}>
+                      📦 購入情報を入力
+                    </div>
+                    <div style={{ display: "grid", gap: 8 }}>
+                      <div>
+                        <label style={{ fontSize: 12, color: "#374151", fontWeight: 600 }}>買取金額（円）*</label>
+                        <input
+                          type="number"
+                          value={purchasePrice}
+                          onChange={(e) => setPurchasePrice(e.target.value)}
+                          placeholder="例: 50000"
+                          style={{
+                            width: "100%",
+                            padding: "6px 8px",
+                            borderRadius: 6,
+                            border: "1px solid #d1d5db",
+                            fontSize: 14,
+                            marginTop: 2,
+                          }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: 12, color: "#374151", fontWeight: 600 }}>相手方氏名</label>
+                        <input
+                          type="text"
+                          value={sellerName}
+                          onChange={(e) => setSellerName(e.target.value)}
+                          placeholder="任意"
+                          style={{
+                            width: "100%",
+                            padding: "6px 8px",
+                            borderRadius: 6,
+                            border: "1px solid #d1d5db",
+                            fontSize: 14,
+                            marginTop: 2,
+                          }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: 12, color: "#374151", fontWeight: 600 }}>相手方住所</label>
+                        <input
+                          type="text"
+                          value={sellerAddress}
+                          onChange={(e) => setSellerAddress(e.target.value)}
+                          placeholder="任意"
+                          style={{
+                            width: "100%",
+                            padding: "6px 8px",
+                            borderRadius: 6,
+                            border: "1px solid #d1d5db",
+                            fontSize: 14,
+                            marginTop: 2,
+                          }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: 12, color: "#374151", fontWeight: 600 }}>本人確認方法</label>
+                        <select
+                          value={idVerification}
+                          onChange={(e) => setIdVerification(e.target.value)}
+                          style={{
+                            width: "100%",
+                            padding: "6px 8px",
+                            borderRadius: 6,
+                            border: "1px solid #d1d5db",
+                            fontSize: 14,
+                            marginTop: 2,
+                          }}
+                        >
+                          <option value="">選択してください</option>
+                          <option value="免許証">免許証</option>
+                          <option value="パスポート">パスポート</option>
+                          <option value="マイナンバーカード">マイナンバーカード</option>
+                          <option value="保険証">保険証</option>
+                          <option value="その他">その他</option>
+                        </select>
+                      </div>
+                      <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                        <button
+                          onClick={() => handlePurchaseSubmit(a)}
+                          disabled={purchaseLoading}
+                          style={{
+                            fontSize: 13,
+                            fontWeight: 600,
+                            color: "#fff",
+                            background: purchaseLoading ? "#9ca3af" : "linear-gradient(to right, #059669, #10b981)",
+                            border: "none",
+                            padding: "8px 16px",
+                            borderRadius: 6,
+                            cursor: purchaseLoading ? "default" : "pointer",
+                          }}
+                        >
+                          {purchaseLoading ? "登録中..." : "台帳に登録"}
+                        </button>
+                        <button
+                          onClick={() => { setPurchaseTarget(null); setPurchasePrice(""); setSellerName(""); setSellerAddress(""); setIdVerification(""); }}
+                          style={{
+                            fontSize: 13,
+                            color: "#6b7280",
+                            background: "transparent",
+                            border: "1px solid #d1d5db",
+                            padding: "8px 16px",
+                            borderRadius: 6,
+                            cursor: "pointer",
+                          }}
+                        >
+                          キャンセル
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setPurchaseTarget(a.id)}
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 600,
+                      color: "#059669",
+                      background: "transparent",
+                      border: "1px solid #86efac",
+                      padding: "6px 12px",
+                      borderRadius: 6,
+                      cursor: "pointer",
+                      marginTop: 4,
+                    }}
+                  >
+                    📦 この商品を購入する
+                  </button>
+                )}
+              </>
             )}
           </div>
         ))}
