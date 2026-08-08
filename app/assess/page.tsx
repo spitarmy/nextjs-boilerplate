@@ -31,7 +31,7 @@ export default function AssessPage() {
                 "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
             }}
           >
-            v?
+            v6
           </span>
 
           <a
@@ -62,28 +62,12 @@ export default function AssessPage() {
           lineHeight: 1.5,
         }}
       >
-        ※ 最大 <b>3枚</b> までアップロードできます。長辺 1024px 程度・JPEG 推奨。
+        ※ 最大 <b>5枚</b> までアップロードできます。JPEG 推奨。
         <br />
         ※ 画像が大きすぎると「FUNCTION_PAYLOAD_TOO_LARGE（413）」エラーになります。
       </p>
 
       <UploadForm />
-
-      <script
-        dangerouslySetInnerHTML={{
-          __html: `
-            (async function(){
-              try{
-                const r = await fetch('/api/version');
-                const j = await r.json();
-                var el = document.getElementById('version-badge');
-                if (!el) return;
-                el.textContent = j.ok && j.version ? j.version : 'v?';
-              }catch(e){}
-            })();
-          `,
-        }}
-      />
     </main>
   );
 }
