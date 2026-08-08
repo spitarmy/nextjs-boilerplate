@@ -64,11 +64,15 @@ const MAX_ORIGINAL_SIZE_PER_FILE = 10 * 1024 * 1024; // 10MB/枚
 const MAX_ORIGINAL_TOTAL_SIZE = 25 * 1024 * 1024; // 合計25MB（元画像の目安）
 
 // ★ 精度重視（ロゴ・刻印・落款などの細部認識を確保）
-const MAX_LONG_SIDE = 1024;
+const MAX_LONG_SIDE_DEFAULT = 1024;
+const MAX_LONG_SIDE_MANY = 768; // 4枚以上の場合は小さくして速度改善
 const JPEG_QUALITY = 0.80;
+function getMaxLongSide(fileCount: number): number {
+  return fileCount >= 4 ? MAX_LONG_SIDE_MANY : MAX_LONG_SIDE_DEFAULT;
+}
 
 // ★ 画像を圧縮してBlobとして返す
-async function fileToCompressedBlob(file: File): Promise<Blob> {
+async function fileToCompressedBlob(file: File, maxLongSide: number = MAX_LONG_SIDE_DEFAULT): Promise<Blob> {
   const img = document.createElement("img");
   const url = URL.createObjectURL(file);
 
@@ -83,7 +87,7 @@ async function fileToCompressedBlob(file: File): Promise<Blob> {
   if (!ctx) throw new Error("Canvas not supported");
 
   let { width, height } = img;
-  const scale = Math.min(1, MAX_LONG_SIDE / Math.max(width, height));
+  const scale = Math.min(1, maxLongSide / Math.max(width, height));
   width = Math.round(width * scale);
   height = Math.round(height * scale);
 
@@ -102,9 +106,9 @@ async function fileToCompressedBlob(file: File): Promise<Blob> {
 }
 
 // ★ 署名URL方式: 画像をSupabase Storageに直接アップロードし、publicURLを返す
-async function uploadImageToStorage(file: File): Promise<string> {
+async function uploadImageToStorage(file: File, maxLongSide: number = MAX_LONG_SIDE_DEFAULT): Promise<string> {
   // 1. 画像を圧縮
-  const blob = await fileToCompressedBlob(file);
+  const blob = await fileToCompressedBlob(file, maxLongSide);
 
   // 2. 署名付きURLを取得
   const filename = file.name || "image.jpg";
@@ -138,8 +142,8 @@ async function uploadImageToStorage(file: File): Promise<string> {
 }
 
 // ★ data URL方式（フォールバック用）
-async function fileToCompressedDataUrl(file: File): Promise<string> {
-  const blob = await fileToCompressedBlob(file);
+async function fileToCompressedDataUrl(file: File, maxLongSide: number = MAX_LONG_SIDE_DEFAULT): Promise<string> {
+  const blob = await fileToCompressedBlob(file, maxLongSide);
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onloadend = () => resolve(reader.result as string);
@@ -370,16 +374,18 @@ export default function UploadForm() {
     try {
       const imageUrls: string[] = [];
 
+      const maxSide = getMaxLongSide(files.length);
+
       for (let i = 0; i < files.length; i++) {
         setProgressStage(`画像をアップロード中... (${i + 1}/${files.length})`);
         try {
           // 署名URL方式でアップロード
-          const publicUrl = await uploadImageToStorage(files[i]);
+          const publicUrl = await uploadImageToStorage(files[i], maxSide);
           imageUrls.push(publicUrl);
         } catch (uploadErr) {
           // フォールバック: 署名URL失敗時はdata URLで送信
           console.warn("署名URLアップロード失敗、data URLで代替:", uploadErr);
-          const dataUrl = await fileToCompressedDataUrl(files[i]);
+          const dataUrl = await fileToCompressedDataUrl(files[i], maxSide);
           imageUrls.push(dataUrl);
         }
       }
@@ -893,7 +899,7 @@ export default function UploadForm() {
         </div>
 
         <p style={{ fontSize: 12, color: "#d1d5db", margin: "0 0 14px", lineHeight: 1.7 }}>
-          最大 {MAX_FILES} 枚までアップロードできます。画像は長辺{MAX_LONG_SIDE}pxに自動圧縮されます。
+          最大 {MAX_FILES} 枚までアップロードできます。画像は自動圧縮されます。
         </p>
 
         {/* 査定モード */}
