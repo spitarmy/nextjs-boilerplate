@@ -41,12 +41,19 @@ async function replyMessage(replyToken: string, text: string) {
 
 // ===== LINE API: 画像取得 =====
 async function getImageContent(messageId: string): Promise<Buffer> {
+  const token = LINE_CHANNEL_ACCESS_TOKEN;
+  console.log(`[LINE_WEBHOOK] getImageContent id=${messageId} token_len=${token?.length ?? 0} token_start=${token?.slice(0, 10) ?? "EMPTY"}`);
+  
   const res = await fetch(`https://api-data.line.me/v2/bot/message/${messageId}/content`, {
     headers: {
-      Authorization: `Bearer ${LINE_CHANNEL_ACCESS_TOKEN}`,
+      Authorization: `Bearer ${token}`,
     },
   });
-  if (!res.ok) throw new Error(`画像取得失敗: ${res.status}`);
+  if (!res.ok) {
+    const errorBody = await res.text().catch(() => "");
+    console.error(`[LINE_WEBHOOK] 画像取得失敗: status=${res.status} body=${errorBody.slice(0, 200)}`);
+    throw new Error(`画像取得失敗: ${res.status} ${errorBody.slice(0, 100)}`);
+  }
   const arrayBuffer = await res.arrayBuffer();
   return Buffer.from(arrayBuffer);
 }
