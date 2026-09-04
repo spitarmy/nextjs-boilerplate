@@ -22,15 +22,18 @@ export async function GET(request: Request) {
     return new NextResponse(error.message, { status: 500 });
   }
 
-  const headers = ["取引年月日", "品目", "特徴", "数量", "買取金額(円)", "相手方氏名", "相手方住所", "本人確認方法"];
+  const headers = ["取引年月日", "取引区分", "品目", "特徴", "数量", "買取金額(円)", "相手方氏名", "相手方年齢", "相手方職業", "相手方住所", "本人確認方法"];
   
   const rows = data?.map(row => [
     row.purchase_date,
+    `"${(row.transaction_type || "").replace(/"/g, '""')}"`,
     `"${(row.item_name || "").replace(/"/g, '""')}"`,
     `"${(row.item_description || "").replace(/"/g, '""')}"`,
     row.quantity,
     row.purchase_price,
     `"${(row.seller_name || "").replace(/"/g, '""')}"`,
+    row.seller_age || "",
+    `"${(row.seller_occupation || "").replace(/"/g, '""')}"`,
     `"${(row.seller_address || "").replace(/"/g, '""')}"`,
     `"${(row.id_verification || "").replace(/"/g, '""')}"`
   ]) || [];

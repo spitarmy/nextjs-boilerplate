@@ -3,11 +3,23 @@ import type { NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 
 export async function middleware(request: NextRequest) {
+  const { pathname } = request.nextUrl;
+
+  // /lp などの公開LPページはミドルウェア処理をスキップ
+  if (pathname.startsWith("/lp")) {
+    return NextResponse.next();
+  }
+
+  // Supabase設定がない場合はスキップ
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
+    return NextResponse.next();
+  }
+
   let supabaseResponse = NextResponse.next({ request });
 
   const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    process.env.NEXT_PUBLIC_SUPABASE_URL,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
     {
       cookies: {
         getAll() {
@@ -32,7 +44,6 @@ export async function middleware(request: NextRequest) {
   // ===== 24時間セッション有効期限チェック =====
   const SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24時間
   const LOGIN_TS_COOKIE = "kanteno_login_ts";
-  const { pathname } = request.nextUrl;
 
   if (user) {
     const loginTs = request.cookies.get(LOGIN_TS_COOKIE)?.value;

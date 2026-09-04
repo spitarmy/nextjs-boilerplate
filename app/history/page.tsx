@@ -34,19 +34,23 @@ export default function HistoryPage() {
       setLoading(true);
       setErrorMsg(null);
 
-      const { data, error } = await supabase
-        .from("appraisals")
-        .select(
-          "id, created_at, mercari_title, output_text, confidence, genre, item_name"
-        )
-        .order("created_at", { ascending: false })
-        .limit(50);
-
-      if (error) {
-        console.error(error);
+      try {
+        const { data: userData } = await supabase.auth.getUser();
+        const uid = userData.user?.id;
+        
+        const url = uid ? `/api/history?user_id=${encodeURIComponent(uid)}` : "/api/history";
+        const res = await fetch(url);
+        const json = await res.json();
+        
+        if (!json.ok) {
+          console.error(json.error);
+          setErrorMsg("査定履歴の取得に失敗しました。");
+        } else {
+          setItems((json.data as Appraisal[]) ?? []);
+        }
+      } catch (err) {
+        console.error(err);
         setErrorMsg("査定履歴の取得に失敗しました。");
-      } else {
-        setItems((data as Appraisal[]) ?? []);
       }
 
       setLoading(false);
