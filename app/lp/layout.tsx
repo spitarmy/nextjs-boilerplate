@@ -1,4 +1,4 @@
-﻿import type { Metadata } from 'next';
+import type { Metadata } from 'next';
 
 export const metadata: Metadata = {
   title: 'カンテノ（KANTEI × KNOW）| 買取現場で生まれたAI真贋・相場査定ツール',
@@ -17,5 +17,18 @@ export default function LpLayout({
 }: {
   children: React.ReactNode;
 }) {
-  return <div className="min-h-screen bg-[#FAF8F5] text-[#2D2926] antialiased selection:bg-[#E89234] selection:text-white font-sans">{children}</div>;
+  return (
+    <>
+      {/* ルートレイアウトのヘッダーとmainラッパーのスタイルをオーバーライド */}
+      <style>{`
+        body { background: #FAF8F5 !important; }
+        body > div > header { display: none !important; }
+        body > div > main { padding: 0 !important; max-width: none !important; }
+        body > div > main > div { max-width: none !important; }
+      `}</style>
+      <div className="min-h-screen bg-[#FAF8F5] text-[#2D2926] antialiased selection:bg-[#E89234] selection:text-white font-sans">
+        {children}
+      </div>
+    </>
+  );
 }
