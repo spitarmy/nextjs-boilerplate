@@ -49,11 +49,12 @@ export async function GET(req: NextRequest) {
     
     const date = new Date().toISOString().split("T")[0];
     const filename = `古物台帳_${date}.csv`;
+    const encodedFilename = encodeURIComponent(filename);
 
     return new NextResponse(bom + csvContent, {
       headers: {
         "Content-Type": "text/csv; charset=utf-8",
-        "Content-Disposition": `attachment; filename="${filename}"`
+        "Content-Disposition": `attachment; filename="ledger_${date}.csv"; filename*=UTF-8''${encodedFilename}`
       }
     });
   } catch (e: any) {
