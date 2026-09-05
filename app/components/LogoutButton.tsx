@@ -39,6 +39,7 @@ export default function LogoutButton() {
         borderRadius: 999,
         border: "1px solid #e5e7eb",
         background: "#fff",
+        color: "#374151",
         fontSize: 12,
         cursor: loading ? "default" : "pointer",
         marginLeft: 8,

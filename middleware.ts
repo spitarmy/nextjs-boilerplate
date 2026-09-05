@@ -88,7 +88,8 @@ export async function middleware(request: NextRequest) {
     !pathname.startsWith("/api/upload-url") &&
     !pathname.startsWith("/api/assess/worker") && // workerは独自認証
     !pathname.startsWith("/api/keepalive") && // cronは認証不要
-    !pathname.startsWith("/api/line/webhook") // LINE Botは署名検証
+    !pathname.startsWith("/api/line/webhook") && // LINE Botは署名検証
+    !pathname.startsWith("/api/ledger/csv") // CSVは独自認証（user_idパラメータ）
   ) {
     if (!user) {
       return NextResponse.json(
