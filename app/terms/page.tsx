@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { ArrowLeft } from "lucide-react";
 
 export default function TermsPage() {
   return (
@@ -7,8 +6,7 @@ export default function TermsPage() {
       <div style={{ maxWidth: "800px", margin: "0 auto", backgroundColor: "#ffffff", padding: "2rem", borderRadius: "0.5rem", boxShadow: "0 1px 3px 0 rgba(0, 0, 0, 0.1)" }}>
         <div style={{ marginBottom: "2rem" }}>
           <Link href="/assess" style={{ display: "inline-flex", alignItems: "center", color: "#4f46e5", textDecoration: "none", fontWeight: 500 }}>
-            <ArrowLeft style={{ width: "1rem", height: "1rem", marginRight: "0.5rem" }} />
-            査定画面に戻る
+            ← 査定画面に戻る
           </Link>
         </div>
         
