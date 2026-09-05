@@ -6,7 +6,12 @@ export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // /lp などの公開LPページはミドルウェア処理をスキップ
-  if (pathname.startsWith("/lp")) {
+  if (
+    pathname.startsWith("/lp") ||
+    pathname.startsWith("/terms") ||
+    pathname.startsWith("/privacy") ||
+    pathname.startsWith("/tokushoho")
+  ) {
     return NextResponse.next();
   }
 
