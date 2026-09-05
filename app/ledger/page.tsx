@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { supabase } from "../../lib/supabase";
 
 type LedgerEntry = {
   id: string;
@@ -30,6 +31,7 @@ type NewItem = {
 export default function LedgerPage() {
   const [entries, setEntries] = useState<LedgerEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [userId, setUserId] = useState<string | null>(null);
   const router = useRouter();
 
   const [showModal, setShowModal] = useState(false);
@@ -49,6 +51,13 @@ export default function LedgerPage() {
 
   useEffect(() => {
     fetchEntries();
+    // ユーザーID取得
+    (async () => {
+      try {
+        const { data } = await supabase.auth.getUser();
+        if (data.user?.id) setUserId(data.user.id);
+      } catch { /* ignore */ }
+    })();
   }, []);
 
   const fetchEntries = async () => {
@@ -171,7 +180,7 @@ export default function LedgerPage() {
             ＋ 新規登録
           </button>
           <a
-            href="/api/ledger/csv"
+            href={`/api/ledger/csv${userId ? `?user_id=${userId}` : ''}`}
             className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded shadow transition"
           >
             CSV出力

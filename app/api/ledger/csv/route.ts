@@ -1,21 +1,33 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseServerClient } from "../../../../lib/supabaseServer";
 import { supabaseAdmin } from "../../../../lib/supabaseAdmin";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
-export async function GET(request: Request) {
-  const supabase = createSupabaseServerClient();
-  const { data: { user } } = await supabase.auth.getUser();
+export async function GET(req: NextRequest) {
+  // ★ サーバーサイド認証（/api/usage と同じパターン）
+  let user_id: string | null = null;
+  try {
+    const supabase = createSupabaseServerClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    user_id = user?.id ?? null;
+  } catch { /* fallback */ }
 
-  if (!user) {
-    return new NextResponse("Unauthorized", { status: 401 });
+  // フォールバック: クエリパラメータ
+  if (!user_id) {
+    const url = new URL(req.url);
+    user_id = url.searchParams.get("user_id");
+  }
+
+  if (!user_id) {
+    return new NextResponse("認証が必要です。再ログインしてください。", { status: 401 });
   }
 
   const { data, error } = await supabaseAdmin
     .from("purchase_ledger")
     .select("*")
-    .eq("user_id", user.id)
+    .eq("user_id", user_id)
     .order("purchase_date", { ascending: false });
 
   if (error) {
@@ -29,7 +41,7 @@ export async function GET(request: Request) {
     `"${(row.transaction_type || "").replace(/"/g, '""')}"`,
     `"${(row.item_name || "").replace(/"/g, '""')}"`,
     `"${(row.item_description || "").replace(/"/g, '""')}"`,
-    row.quantity,
+    row.quantity ?? 1,
     row.purchase_price,
     `"${(row.seller_name || "").replace(/"/g, '""')}"`,
     row.seller_age || "",
