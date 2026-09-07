@@ -792,8 +792,13 @@ export default function CantenoLandingPage() {
             </div>
           </div>
 
-          <div className="pt-8 text-center text-xs text-[#5C534A]">
-            © {new Date().getFullYear()} ZENNOBATE COMPANY. All rights reserved.
+          <div className="pt-8 text-center text-xs text-[#5C534A] space-y-3">
+            <div className="flex justify-center gap-5 flex-wrap">
+              <a href="/terms" className="text-[#7A6F62] hover:text-[#E88E2D] transition">利用規約</a>
+              <a href="/privacy" className="text-[#7A6F62] hover:text-[#E88E2D] transition">プライバシーポリシー</a>
+              <a href="/tokushoho" className="text-[#7A6F62] hover:text-[#E88E2D] transition">特定商取引法に基づく表記</a>
+            </div>
+            <p>© {new Date().getFullYear()} ZENNOBATE COMPANY. All rights reserved.</p>
           </div>
         </div>
       </footer>

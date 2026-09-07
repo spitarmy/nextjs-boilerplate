@@ -146,6 +146,35 @@ export default function RootLayout({
               {children}
             </div>
           </main>
+
+          {/* ==========================
+              フッター
+            ========================== */}
+          <footer
+            style={{
+              borderTop: "1px solid #e5e7eb",
+              padding: "16px 18px",
+              textAlign: "center",
+              fontSize: 12,
+              color: "#9ca3af",
+            }}
+          >
+            <div
+              style={{
+                maxWidth: 1040,
+                margin: "0 auto",
+                display: "flex",
+                justifyContent: "center",
+                gap: 20,
+                flexWrap: "wrap",
+              }}
+            >
+              <a href="/terms" style={{ color: "#6b7280", textDecoration: "none" }}>利用規約</a>
+              <a href="/privacy" style={{ color: "#6b7280", textDecoration: "none" }}>プライバシーポリシー</a>
+              <a href="/tokushoho" style={{ color: "#6b7280", textDecoration: "none" }}>特定商取引法に基づく表記</a>
+            </div>
+            <div style={{ marginTop: 8 }}>© 2026 株式会社ゼノベイト</div>
+          </footer>
         </div>
       </body>
     </html>
