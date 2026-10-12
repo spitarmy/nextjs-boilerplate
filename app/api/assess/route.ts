@@ -351,12 +351,17 @@ async function classifyGenre(
       { type: "input_image", image_url: images[0] },
     ];
 
-    const res: any = await callOpenAIWithRetry(client, {
+    // ★ モバイル対策: ジャンル分類は最大8秒でタイムアウトし、フォールバックへ進める
+    const classifyPromise = callOpenAIWithRetry(client, {
       model: "gpt-4.1-mini",
       temperature: 0,
       max_output_tokens: 50,
       input: [{ role: "user", content }],
     });
+    const classifyTimeout = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("classifyGenre timeout")), 8000)
+    );
+    const res: any = await Promise.race([classifyPromise, classifyTimeout]);
 
     const text = res.output?.[0]?.content?.[0]?.text ?? "";
     const cleaned = text.replace(/```json/gi, "").replace(/```/g, "").trim();
@@ -786,6 +791,20 @@ export async function POST(req: NextRequest) {
         }
       }
 
+      // ★ モバイルSafari対策: 初期バッファリングを突破するための1KBパディング
+      try {
+        controller.enqueue(encoder.encode(": " + " ".repeat(1024) + "\n\n"));
+      } catch { /* ignore */ }
+
+      // ★ モバイル接続維持対策: 3秒ごとにキープアライブを送り無通信切断を防止
+      let keepAliveTimer: NodeJS.Timeout | null = setInterval(() => {
+        try {
+          controller.enqueue(encoder.encode(": ping\n\n"));
+        } catch {
+          if (keepAliveTimer) clearInterval(keepAliveTimer);
+        }
+      }, 3000);
+
       const assessStartTime = Date.now();
 
       try {
@@ -1057,8 +1076,10 @@ export async function POST(req: NextRequest) {
         const totalMs = Date.now() - assessStartTime;
         console.log(`[KANTENO_ASSESS] done user=${user_id ?? 'anon'} genre=${detectedGenre} confidence=${confidence ?? '?'} elapsed=${totalMs}ms`);
 
+        if (keepAliveTimer) clearInterval(keepAliveTimer);
         controller.close();
       } catch (e: any) {
+        if (keepAliveTimer) clearInterval(keepAliveTimer);
         const totalMs = Date.now() - assessStartTime;
         const category = categorizeOpenAIError(e);
         console.error(`[KANTENO_ERROR] assess_failed user=${user_id ?? 'anon'} category=${category} elapsed=${totalMs}ms`, e?.message);

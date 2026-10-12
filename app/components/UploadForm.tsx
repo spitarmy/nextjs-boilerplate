@@ -420,18 +420,28 @@ export default function UploadForm() {
 
       setProgressStage("サーバーに送信中...");
 
-      const res = await fetch("/api/assess", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          image_urls: imageUrls,
-          user_id: userId,
-          listing_mode: listingMode,
-          assess_mode: assessMode,
-          user_hints: Object.keys(userHints).length ? userHints : null,
-          has_seal_closeup: !!sealFile,
-        }),
-      });
+      // ★ モバイル接続対策: 最大75秒のAbortControllerを設定
+      const abortController = new AbortController();
+      const fetchTimeoutId = setTimeout(() => abortController.abort(), 75000);
+
+      let res: Response;
+      try {
+        res = await fetch("/api/assess", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: abortController.signal,
+          body: JSON.stringify({
+            image_urls: imageUrls,
+            user_id: userId,
+            listing_mode: listingMode,
+            assess_mode: assessMode,
+            user_hints: Object.keys(userHints).length ? userHints : null,
+            has_seal_closeup: !!sealFile,
+          }),
+        });
+      } finally {
+        clearTimeout(fetchTimeoutId);
+      }
 
       // 認証エラー → ログインページへ
       if (res.status === 401) {
@@ -449,58 +459,85 @@ export default function UploadForm() {
         const decoder = new TextDecoder();
         let buffer = "";
 
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
+        // ★ モバイルSafari対策: ウォッチドッグタイマー（無通信監視）
+        // 25秒間サーバーから何のデータ（キープアライブ含む）も届かなければ切断と判定
+        let lastActivity = Date.now();
+        let hasCompleted = false;
+        const watchdog = setInterval(() => {
+          if (!hasCompleted && Date.now() - lastActivity > 28000) {
+            clearInterval(watchdog);
+            reader.cancel().catch(() => {});
+            setErrorMsg("通信が途切れたか、査定がタイムアウトしました。電波の良い環境で再度お試しください。");
+            setLoading(false);
+            setProgressStage(null);
+          }
+        }, 2000);
 
-          buffer += decoder.decode(value, { stream: true });
+        try {
+          while (true) {
+            // モバイルSafariでread()が永久保留になるのを防ぐ安全弁（1回あたり最大30秒）
+            const readPromise = reader.read();
+            const chunkTimeout = new Promise<{ done: boolean; value: undefined }>((_, reject) =>
+              setTimeout(() => reject(new Error("CHUNK_TIMEOUT")), 30000)
+            );
 
-          // SSEイベントをパース（event: xxx\ndata: xxx\n\n）
-          const events = buffer.split("\n\n");
-          buffer = events.pop() || ""; // 最後の不完全なチャンクをバッファに残す
+            const { done, value } = await Promise.race([readPromise, chunkTimeout]);
+            lastActivity = Date.now(); // データ受信時刻を更新
+            if (done) break;
 
-          for (const block of events) {
-            if (!block.trim()) continue;
+            buffer += decoder.decode(value, { stream: true });
 
-            const lines = block.split("\n");
-            let eventType = "";
-            let eventData = "";
+            // SSEイベントをパース（\r\n\r\n と \n\n の両方に対応）
+            const events = buffer.split(/\r?\n\r?\n/);
+            buffer = events.pop() || ""; // 最後の不完全なチャンクをバッファに残す
 
-            for (const line of lines) {
-              if (line.startsWith("event: ")) {
-                eventType = line.slice(7).trim();
-              } else if (line.startsWith("data: ")) {
-                eventData = line.slice(6);
-              }
-            }
+            for (const block of events) {
+              if (!block.trim()) continue;
 
-            if (!eventType || !eventData) continue;
+              const lines = block.split(/\r?\n/);
+              let eventType = "";
+              let eventData = "";
 
-            try {
-              const data = JSON.parse(eventData);
-
-              if (eventType === "progress") {
-                setProgressStage(data.message || "処理中...");
-              } else if (eventType === "result") {
-                const json = data as AssessResponse;
-                if (json?.usage) setUsage(json.usage);
-                setResult(json);
-              } else if (eventType === "error") {
-                const json = data as AssessResponse;
-                if (json?.usage) setUsage(json.usage);
-                if (json?.over_limit) {
-                  setResult(json);
-                  setErrorMsg(json.error || "今月の上限に達しました。プロプランへのアップグレードをご検討ください。");
-                } else {
-                  setErrorMsg(json.error || "査定に失敗しました。時間をおいて再度お試しください。");
+              for (const line of lines) {
+                if (line.startsWith("event: ")) {
+                  eventType = line.slice(7).trim();
+                } else if (line.startsWith("data: ")) {
+                  eventData = line.slice(6).trim();
                 }
-              } else if (eventType === "done") {
-                // 完了
               }
-            } catch {
-              // JSONパース失敗は無視
+
+              if (!eventType || !eventData) continue;
+
+              try {
+                const data = JSON.parse(eventData);
+
+                if (eventType === "progress") {
+                  setProgressStage(data.message || "処理中...");
+                } else if (eventType === "result") {
+                  hasCompleted = true;
+                  const json = data as AssessResponse;
+                  if (json?.usage) setUsage(json.usage);
+                  setResult(json);
+                } else if (eventType === "error") {
+                  hasCompleted = true;
+                  const json = data as AssessResponse;
+                  if (json?.usage) setUsage(json.usage);
+                  if (json?.over_limit) {
+                    setResult(json);
+                    setErrorMsg(json.error || "今月の上限に達しました。プロプランへのアップグレードをご検討ください。");
+                  } else {
+                    setErrorMsg(json.error || "査定に失敗しました。時間をおいて再度お試しください。");
+                  }
+                } else if (eventType === "done") {
+                  hasCompleted = true;
+                }
+              } catch {
+                // JSONパース失敗は無視
+              }
             }
           }
+        } finally {
+          clearInterval(watchdog);
         }
       } else {
         // フォールバック: 従来のJSONレスポンス（402エラー等）
