@@ -487,15 +487,15 @@ async function loadReferencesForGenre(
       .order("created_at", { ascending: false });
 
     if (genre !== "other") {
-      // ジャンル名の部分一致でフィルタ（training_items.genre は日本語なのでマッピング）
+      // ジャンル名の部分一致でフィルタ（日本語 + 英語コード両方に対応）
       const genreKeywords: Record<GenreCategory, string[]> = {
-        brand_bag: ["ブランド", "バッグ", "財布", "革"],
-        jewelry: ["ジュエリー", "宝石", "貴金属", "指輪", "ネックレス"],
-        wamon: ["書画", "掛軸", "陶磁器", "茶道具", "着物", "和"],
-        kinko_urushi: ["金工", "漆器", "鉄瓶", "銀瓶"],
-        watch: ["時計", "腕時計"],
-        toy: ["おもちゃ", "フィギュア", "ホビー"],
-        electronics: ["家電", "カメラ", "オーディオ"],
+        brand_bag: ["ブランド", "バッグ", "財布", "革", "brand_bag", "bag"],
+        jewelry: ["ジュエリー", "宝石", "貴金属", "指輪", "ネックレス", "jewelry"],
+        wamon: ["書画", "掛軸", "陶磁器", "茶道具", "着物", "和", "wamon"],
+        kinko_urushi: ["金工", "漆器", "鉄瓶", "銀瓶", "kinko_urushi"],
+        watch: ["時計", "腕時計", "watch"],
+        toy: ["おもちゃ", "フィギュア", "ホビー", "toy"],
+        electronics: ["家電", "カメラ", "オーディオ", "electronics"],
         other: [],
       };
 
