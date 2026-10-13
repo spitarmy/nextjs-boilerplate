@@ -3,6 +3,7 @@ import OpenAI from "openai";
 import { supabaseAdmin } from "../../../lib/supabaseAdmin";
 import { createSupabaseServerClient } from "../../../lib/supabaseServer";
 import { checkRateLimit } from "../../../lib/rateLimit";
+import { detectWebEntities } from "../../../lib/googleVision";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -820,22 +821,23 @@ export async function POST(req: NextRequest) {
       const assessStartTime = Date.now();
 
       try {
-        // ===== Stage 1: ジャンル分類 + 利用量チェック（並列） =====
+        // ===== Stage 1: ジャンル分類 + Google画像検索 + 利用量チェック（並列） =====
         console.log(`[KANTENO_ASSESS] start user=${user_id ?? 'anon'} images=${images.length} mode=${assess_mode} listing=${listing_mode}`);
 
-        sendEvent("progress", { stage: "classify", message: "ジャンル分類中..." });
+        sendEvent("progress", { stage: "classify", message: "Google画像検索 & 特徴分析中..." });
 
-        const [monthUsage, allow_training, detectedGenre, userPlan] = await Promise.all([
+        const [monthUsage, allow_training, detectedGenre, userPlan, googleLensInfo] = await Promise.all([
           getMonthlyUsageUnits(user_id),
           getUserAllowTraining(user_id),
           classifyGenre(openai, images, hints),
           getUserPlan(user_id),
+          detectWebEntities(images[0]), // ★ Google Cloud Vision で全世界のWeb一致（商品名等）を逆引き特定！
         ]);
 
         const planLimit = getPlanLimit(userPlan);
 
         const classifyMs = Date.now() - assessStartTime;
-        console.log(`[KANTENO_ASSESS] classified genre=${detectedGenre} plan=${userPlan} elapsed=${classifyMs}ms`);
+        console.log(`[KANTENO_ASSESS] classified genre=${detectedGenre} plan=${userPlan} googleLens=${googleLensInfo?.bestGuessTitle ?? 'none'} elapsed=${classifyMs}ms`);
 
         // 月次上限チェック（プロプランは無制限のためスキップ）
         if (planLimit !== null) {
@@ -860,14 +862,14 @@ export async function POST(req: NextRequest) {
         // ===== Stage 2: リファレンス取得 =====
         sendEvent("progress", {
           stage: "references",
-          message: "リファレンス取得中...",
+          message: "自社リファレンス照合中...",
           genre: detectedGenre,
         });
 
         const referenceText = await loadReferencesForGenre(detectedGenre, hints);
 
         // ===== Stage 3: AI査定 =====
-        sendEvent("progress", { stage: "assess", message: "AI査定中..." });
+        sendEvent("progress", { stage: "assess", message: "AI鑑定・出品文生成中..." });
 
         // モード別プロンプト
         let modePrompt = "";
@@ -877,10 +879,15 @@ export async function POST(req: NextRequest) {
           modePrompt = listing_mode === "auction" ? PROMPT_NORMAL_AUCTION : PROMPT_NORMAL_FLEA;
         }
 
+        const googleLensPrompt = googleLensInfo?.summaryHint
+          ? `【Google画像検索・Web一致情報（最重要特定情報）】\n画像照合によりWeb上から以下の同一・類似商品情報が検出されました。商品名・キャラクター名・型番の特定に最優先で反映してください：\n${googleLensInfo.summaryHint}`
+          : null;
+
         const content: any[] = [
           { type: "input_text", text: SYSTEM_PROMPT_BASE },
           { type: "input_text", text: modePrompt },
           { type: "input_text", text: `【事前分類】この商品は「${detectedGenre}」ジャンルと判定されました。この分類を参考にしつつ、画像を主軸に査定してください。分類が明らかに間違っている場合は無視してください。` },
+          googleLensPrompt ? { type: "input_text", text: googleLensPrompt } : null,
           hintsText ? { type: "input_text", text: hintsText } : null,
           referenceText
             ? { type: "input_text", text: referenceText + "\n---\n上記の参考情報のうち画像に最も近いものを優先的に活用してください。" }
