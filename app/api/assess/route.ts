@@ -507,11 +507,29 @@ async function loadReferencesForGenre(
       }
     }
 
-    const { data: trainingRows } = await trainingQuery.limit(10);
+    // ヒントがある場合、キーワードに完全一致する教師データをピンポイント優先取得
+    const searchWord = sanitizeForFilter(hints?.known_model || hints?.known_author || hints?.known_title || "");
+    if (searchWord) {
+      const { data: matchedRows } = await supabaseAdmin
+        .from("training_items")
+        .select("genre,item_name,confidence,output_text")
+        .eq("is_trainable", true)
+        .ilike("item_name", `%${searchWord}%`)
+        .limit(5);
+
+      if (matchedRows?.length) {
+        blocks.push(
+          "[キーワード一致の優先教師データ]\n" +
+          matchedRows.map((r: any) => `商品:${r.item_name} / 判定基準:${r.output_text}`).join("\n")
+        );
+      }
+    }
+
+    const { data: trainingRows } = await trainingQuery.limit(15);
     if (trainingRows?.length) {
       blocks.push(
-        "[過去の教師データ]\n" +
-        trainingRows.map((r: any) => `ジャンル:${r.genre} / 商品:${r.item_name} / 信頼度:${r.confidence}% / 概要:${r.output_text}`).join("\n")
+        "[ジャンル別エキスパート教師データ]\n" +
+        trainingRows.map((r: any) => `ジャンル:${r.genre} / 商品:${r.item_name} / 信頼度:${r.confidence}% / 判定基準・真贋ポイント:${r.output_text}`).join("\n")
       );
     }
   } catch (e) {
