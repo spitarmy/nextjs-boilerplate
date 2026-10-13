@@ -172,7 +172,7 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// ===== OpenAI呼び出し（429/500/503時はリトライ） =====
+// ===== OpenAI呼び出し（429/500/503時はリトライ、ただし残高不足は即座にスロー） =====
 async function callOpenAIWithRetry(client: OpenAI, payload: any, maxRetries = 3): Promise<any> {
   let attempt = 0;
   const retryableStatuses = [429, 500, 502, 503];
@@ -181,10 +181,14 @@ async function callOpenAIWithRetry(client: OpenAI, payload: any, maxRetries = 3)
       return await client.responses.create(payload);
     } catch (err: any) {
       const status = err?.status ?? err?.response?.status;
-      if (!retryableStatuses.includes(status) || attempt >= maxRetries) {
-        // リトライ不可なエラーは分類してログ
+      const code = err?.code ?? err?.error?.code ?? "";
+      const message = (err?.message ?? "").toLowerCase();
+
+      // ★ 残高不足（insufficient_quota）はリトライしても絶対に成功しないため即座にスロー
+      const isQuota = code === "insufficient_quota" || message.includes("quota");
+      if (isQuota || !retryableStatuses.includes(status) || attempt >= maxRetries) {
         const errorCategory = categorizeOpenAIError(err);
-        console.error(`[KANTENO_ERROR] category=${errorCategory} status=${status} model=${payload.model} attempt=${attempt}`, err?.message);
+        console.error(`[KANTENO_ERROR] category=${errorCategory} status=${status} code=${code} model=${payload.model} attempt=${attempt}`, err?.message);
         throw err;
       }
       attempt += 1;
@@ -198,7 +202,12 @@ async function callOpenAIWithRetry(client: OpenAI, payload: any, maxRetries = 3)
 // ===== エラー分類 =====
 function categorizeOpenAIError(err: any): string {
   const status = err?.status ?? err?.response?.status;
+  const code = (err?.code ?? err?.error?.code ?? "").toLowerCase();
   const message = (err?.message ?? "").toLowerCase();
+
+  if (code === "insufficient_quota" || message.includes("quota") || message.includes("billing")) {
+    return "QUOTA_EXCEEDED";
+  }
   if (status === 429) return "RATE_LIMIT";
   if (status === 500 || status === 502 || status === 503) return "OPENAI_SERVER_ERROR";
   if (status === 400) return "BAD_REQUEST";
@@ -211,9 +220,12 @@ function categorizeOpenAIError(err: any): string {
 // ===== ユーザー向けエラーメッセージ =====
 function getUserFriendlyError(err: any): string {
   const category = categorizeOpenAIError(err);
+  const rawMsg = err?.message ? ` (${err.message})` : "";
   switch (category) {
+    case "QUOTA_EXCEEDED":
+      return "AI側の利用残高（クレジット）が不足しています。OpenAIの請求・残高設定をご確認ください。";
     case "RATE_LIMIT":
-      return "AI側のレート制限に達しています。少し時間をおいて再度お試しください。";
+      return "AI側の短時間リクエスト制限に達しています。1〜2分おいて再度お試しください。";
     case "OPENAI_SERVER_ERROR":
       return "AIサービスが一時的に利用できません。数分後に再度お試しください。";
     case "TIMEOUT":
@@ -221,9 +233,9 @@ function getUserFriendlyError(err: any): string {
     case "NETWORK_ERROR":
       return "ネットワークエラーが発生しました。インターネット接続を確認してください。";
     case "BAD_REQUEST":
-      return "画像の形式に問題がある可能性があります。別の画像でお試しください。";
+      return `画像の形式やパラメータに問題がある可能性があります。${rawMsg}`;
     default:
-      return "査定中にエラーが発生しました。しばらくしてから再度お試しください。";
+      return `査定中にエラーが発生しました。しばらくしてから再度お試しください。${rawMsg}`;
   }
 }
 
