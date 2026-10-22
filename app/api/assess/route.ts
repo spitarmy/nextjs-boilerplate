@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60; // Vercel Pro: 最大60秒（Hobbyのデフォルト10秒では査定がタイムアウトする）
 
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey: process.env.OPENAI_API_KEY || "dummy_for_build",
 });
 
 type ListingMode = "flea" | "auction";
@@ -399,22 +399,92 @@ async function classifyGenre(
   return "other";
 }
 
-// ===== 案E+G: ジャンル別リファレンス取得（関連テーブルだけクエリ） =====
+// ===== 案E+G: ジャンル別リファレンス取得（Google Lens情報 + ブランドマスター統合版） =====
 async function loadReferencesForGenre(
   genre: GenreCategory,
-  hints: UserHints | null
+  hints: UserHints | null,
+  googleLensInfo?: any | null
 ): Promise<string> {
   const blocks: string[] = [];
 
   try {
-    // ジャンルに応じて必要なリファレンスだけ取得
-    // ★ watch/jewelry もブランド品が多いため brand_data を併せて取得
-    if (genre === "brand_bag" || genre === "watch" || genre === "jewelry" || genre === "other") {
-      // 案G: hints の型番/ブランド名/商品名でフィルタ
-      let query = supabaseAdmin.from("brand_data_reference_v2").select("brand,line_name,model_name");
+    // 総合検索キーワードの抽出（ユーザー入力 + Google画像検索結果）
+    const searchTerms: string[] = [];
+    if (hints?.known_author) searchTerms.push(hints.known_author);
+    if (hints?.known_title) searchTerms.push(hints.known_title);
+    if (hints?.known_model) searchTerms.push(hints.known_model);
+    if (googleLensInfo?.bestGuessTitle) searchTerms.push(googleLensInfo.bestGuessTitle);
+    if (Array.isArray(googleLensInfo?.matchedTitles)) {
+      searchTerms.push(...googleLensInfo.matchedTitles.slice(0, 3));
+    }
+    const combinedSearchText = searchTerms.join(" ").toLowerCase();
 
-      // ヒントがある場合、OR条件で絞り込み（関連性の高いリファレンスを優先取得）
+    // 主要20ブランドのマッピング定義
+    const MAJOR_BRAND_MAP = [
+      { name: "Louis Vuitton", match: ["louis vuitton", "ヴィトン", "vuitton", "モノグラム", "ダミエ", "エピ", "スピーディ", "ネヴァーフル", "キーポル"] },
+      { name: "CHANEL", match: ["chanel", "シャネル", "マトラッセ", "ココマーク", "カンボン", "キャビアスキン", "ボーイシャネル"] },
+      { name: "HERMES", match: ["hermes", "エルメス", "バーキン", "ケリー", "ピコタン", "ボリード", "コンスタンス", "シェーヌダンクル"] },
+      { name: "Rolex", match: ["rolex", "ロレックス", "サブマリーナー", "デイトナ", "デイトジャスト", "gmtマスター", "エクスプローラー"] },
+      { name: "Cartier", match: ["cartier", "カルティエ", "ラブブレス", "ラブリング", "トリニティ", "タンク", "サントス", "ジュストアンクル"] },
+      { name: "Gucci", match: ["gucci", "グッチ", "ggマーモント", "オフィディア", "シェリーライン", "ソーホー"] },
+      { name: "PRADA", match: ["prada", "プラダ", "サフィアーノ", "テスート", "ポコノ", "三角プレート"] },
+      { name: "CELINE", match: ["celine", "セリーヌ", "トリオンフ", "ラゲージ", "ベルトバッグ", "カバ"] },
+      { name: "Dior", match: ["dior", "ディオール", "レディディオール", "カナージュ", "サドル", "ブックトート"] },
+      { name: "Van Cleef & Arpels", match: ["van cleef", "ヴァンクリーフ", "アルハンブラ", "フリヴォル", "ペルレ"] },
+      { name: "Tiffany & Co.", match: ["tiffany", "ティファニー", "tスマイル", "オープンハート", "ハードウェア"] },
+      { name: "Chrome Hearts", match: ["chrome hearts", "クロムハーツ", "ダガー", "chクロス", "キーパー"] },
+      { name: "Omega", match: ["omega", "オメガ", "スピードマスター", "シーマスター", "アクアテラ"] },
+      { name: "Saint Laurent", match: ["saint laurent", "サンローラン", "ysl", "カサンドラ", "ルー"] },
+      { name: "Bottega Veneta", match: ["bottega", "ボッテガ", "イントレチャート", "カセット", "ジョディ"] },
+      { name: "LOEWE", match: ["loewe", "ロエベ", "パズル", "ハンモック", "アマソナ", "アナグラム"] },
+      { name: "Balenciaga", match: ["balenciaga", "バレンシアガ", "エブリデイ", "カバス", "シティ"] },
+      { name: "Fendi", match: ["fendi", "フェンディ", "バゲット", "ピーカブー", "ズッカ"] },
+      { name: "Moncler", match: ["moncler", "モンクレール", "マヤ", "モンジュネーブル"] },
+      { name: "Grand Seiko", match: ["grand seiko", "グランドセイコー", "スプリングドライブ"] },
+    ];
+
+    let identifiedBrand: string | null = null;
+    for (const b of MAJOR_BRAND_MAP) {
+      if (b.match.some((m) => combinedSearchText.includes(m))) {
+        identifiedBrand = b.name;
+        break;
+      }
+    }
+
+    // 1. 主要ブランドプロ鑑定士マスター（brand_data_reference）の取得（最優先枠）
+    if (identifiedBrand) {
+      // 「全ライン共通鑑定基準」または詳細鑑定ルールを最優先取得
+      const { data: masterRows } = await supabaseAdmin
+        .from("brand_data_reference")
+        .select("brand,model_or_line,font_rules,stamp_rules,hardware_rules,stitch_rules,common_fake_signs,quality_markers,notes")
+        .ilike("brand", `%${identifiedBrand}%`)
+        .order("model_or_line", { ascending: false }) // 「全ライン共通...」が先頭に来るように
+        .limit(3);
+
+      if (masterRows?.length) {
+        blocks.push(
+          "【★最重要★ 主要ブランド・プロ鑑定士真贋チェック基準（客前判定用）】\n" +
+          masterRows.map((r: any) => [
+            `【対象ブランド】${r.brand}（${r.model_or_line}）`,
+            `・フォント・刻印基準: ${r.font_rules ?? "規定なし"}`,
+            `・打刻・箔押し基準: ${r.stamp_rules ?? "規定なし"}`,
+            `・金具・ビス・ZIP基準: ${r.hardware_rules ?? "規定なし"}`,
+            `・縫製・ステッチ基準: ${r.stitch_rules ?? "規定なし"}`,
+            `・偽物・基準外サイン: ${r.common_fake_signs ?? "規定なし"}`,
+            `・プロ推奨チェックポイント: ${r.notes ?? "規定なし"}`,
+          ].filter(Boolean).join("\n")).join("\n\n")
+        );
+      }
+    }
+
+    // 2. モデル別リファレンス（brand_data_reference_v2）の取得（真贋ポイント＋偽物パターンを全取得）
+    if (genre === "brand_bag" || genre === "watch" || genre === "jewelry" || genre === "other" || identifiedBrand) {
+      let query = supabaseAdmin
+        .from("brand_data_reference_v2")
+        .select("brand,line_name,model_name,material,authenticity_points,common_fake_patterns,mercari_price_low,mercari_price_high");
+
       const brandFilters: string[] = [];
+      if (identifiedBrand) brandFilters.push(`brand.ilike.%${identifiedBrand}%`);
       if (hints?.known_model) brandFilters.push(`model_name.ilike.%${sanitizeForFilter(hints.known_model)}%`);
       if (hints?.known_author) brandFilters.push(`brand.ilike.%${sanitizeForFilter(hints.known_author)}%`);
       if (hints?.known_title) brandFilters.push(`line_name.ilike.%${sanitizeForFilter(hints.known_title)}%`);
@@ -423,39 +493,42 @@ async function loadReferencesForGenre(
         query = query.or(brandFilters.join(","));
       }
 
-      const { data: brandRows } = await query.limit(15);
+      const { data: brandRows } = await query.limit(10);
       if (brandRows?.length) {
         blocks.push(
-          "[ブランドバッグ系リファレンス]\n" +
-          brandRows.map((r: any) => `ブランド:${r.brand} / ライン:${r.line_name} / モデル:${r.model_name}`).join("\n")
+          "[モデル別・真贋チェックポイント（自社DB）]\n" +
+          brandRows.map((r: any) => [
+            `ブランド:${r.brand} / モデル:${r.model_name || r.line_name}`,
+            r.material ? `素材:${r.material}` : "",
+            r.authenticity_points ? `正規品ポイント:${r.authenticity_points}` : "",
+            r.common_fake_patterns ? `贋作パターン:${r.common_fake_patterns}` : "",
+            (r.mercari_price_low && r.mercari_price_high) ? `参考相場:${r.mercari_price_low.toLocaleString()}〜${r.mercari_price_high.toLocaleString()}円` : "",
+          ].filter(Boolean).join(" / ")).join("\n")
         );
       }
     }
 
     if (genre === "jewelry" || genre === "other") {
-      const { data: jewelryRows } = await supabaseAdmin.from("jewelry_reference").select("*").limit(15);
+      const { data: jewelryRows } = await supabaseAdmin.from("jewelry_reference").select("*").limit(10);
       if (jewelryRows?.length) {
         blocks.push("[ジュエリー系リファレンス]\n" + jewelryRows.map((r: any) => JSON.stringify(r)).join("\n"));
       }
     }
 
     if (genre === "kinko_urushi" || genre === "wamon" || genre === "other") {
-      // 金工・漆器は和物と関連が深いため、wamon と kinko_urushi を相互に取得
-      const { data: kinkoRows } = await supabaseAdmin.from("kinko_urushi_reference").select("*").limit(15);
+      const { data: kinkoRows } = await supabaseAdmin.from("kinko_urushi_reference").select("*").limit(10);
       if (kinkoRows?.length) {
         blocks.push("[金工・漆器系リファレンス]\n" + kinkoRows.map((r: any) => JSON.stringify(r)).join("\n"));
       }
     }
 
     if (genre === "wamon" || genre === "kinko_urushi" || genre === "other") {
-      // 案G: 作家名・署名・落款でフィルタ
       let query = supabaseAdmin
         .from("wamon_reference")
         .select(
           "genre,category,author_name,style_traits,stroke_traits,signature_traits,seal_text,seal_shape_color,seal_position,authenticity_points,common_fake_patterns,era,school_lineage"
         );
 
-      // ヒントがある場合、OR条件で関連作家を優先取得
       const wamonFilters: string[] = [];
       if (hints?.known_author) wamonFilters.push(`author_name.ilike.%${sanitizeForFilter(hints.known_author)}%`);
       if (hints?.known_signature) wamonFilters.push(`signature_traits.ilike.%${sanitizeForFilter(hints.known_signature)}%`);
@@ -465,7 +538,7 @@ async function loadReferencesForGenre(
         query = query.or(wamonFilters.join(","));
       }
 
-      const { data: wamonRows } = await query.limit(20);
+      const { data: wamonRows } = await query.limit(15);
       if (wamonRows?.length) {
         blocks.push(
           "[和物（書画・陶磁器・茶道具・箱書）リファレンス]\n" +
@@ -479,7 +552,37 @@ async function loadReferencesForGenre(
       }
     }
 
-    // 教師データはジャンルでフィルタ（genre が "other" の場合は全ジャンル）
+    // 3. 教師データ（training_items）のピンポイント優先取得
+    const priorityKeywords = [
+      identifiedBrand,
+      hints?.known_model,
+      hints?.known_author,
+      hints?.known_title,
+      googleLensInfo?.bestGuessTitle,
+    ].filter(Boolean);
+
+    if (priorityKeywords.length > 0) {
+      const orFilter = priorityKeywords
+        .map((k) => `item_name.ilike.%${sanitizeForFilter(String(k))}%`)
+        .join(",");
+
+      const { data: matchedRows } = await supabaseAdmin
+        .from("training_items")
+        .select("genre,item_name,confidence,output_text,source")
+        .eq("is_trainable", true)
+        .or(orFilter)
+        .order("created_at", { ascending: false }) // 最新のエキスパートデータを最優先
+        .limit(5);
+
+      if (matchedRows?.length) {
+        blocks.push(
+          "【★一致商品・エキスパート鑑定教師データ（最優先参考）】\n" +
+          matchedRows.map((r: any) => `商品:${r.item_name} / 判定基準:${r.output_text}`).join("\n\n")
+        );
+      }
+    }
+
+    // ジャンル別一般教師データ
     let trainingQuery = supabaseAdmin
       .from("training_items")
       .select("genre,item_name,output_text,confidence")
@@ -487,7 +590,6 @@ async function loadReferencesForGenre(
       .order("created_at", { ascending: false });
 
     if (genre !== "other") {
-      // ジャンル名の部分一致でフィルタ（日本語 + 英語コード両方に対応）
       const genreKeywords: Record<GenreCategory, string[]> = {
         brand_bag: ["ブランド", "バッグ", "財布", "革", "brand_bag", "bag"],
         jewelry: ["ジュエリー", "宝石", "貴金属", "指輪", "ネックレス", "jewelry"],
@@ -501,31 +603,12 @@ async function loadReferencesForGenre(
 
       const keywords = genreKeywords[genre] ?? [];
       if (keywords.length > 0) {
-        // OR条件で部分一致フィルタ（Supabase の or() を使用）
         const orFilter = keywords.map((kw) => `genre.ilike.%${kw}%`).join(",");
         trainingQuery = trainingQuery.or(orFilter);
       }
     }
 
-    // ヒントがある場合、キーワードに完全一致する教師データをピンポイント優先取得
-    const searchWord = sanitizeForFilter(hints?.known_model || hints?.known_author || hints?.known_title || "");
-    if (searchWord) {
-      const { data: matchedRows } = await supabaseAdmin
-        .from("training_items")
-        .select("genre,item_name,confidence,output_text")
-        .eq("is_trainable", true)
-        .ilike("item_name", `%${searchWord}%`)
-        .limit(5);
-
-      if (matchedRows?.length) {
-        blocks.push(
-          "[キーワード一致の優先教師データ]\n" +
-          matchedRows.map((r: any) => `商品:${r.item_name} / 判定基準:${r.output_text}`).join("\n")
-        );
-      }
-    }
-
-    const { data: trainingRows } = await trainingQuery.limit(15);
+    const { data: trainingRows } = await trainingQuery.limit(10);
     if (trainingRows?.length) {
       blocks.push(
         "[ジャンル別エキスパート教師データ]\n" +
@@ -615,12 +698,22 @@ const PROMPT_NORMAL_FLEA = [
   "・auction_title は null にする（生成しない）",
   "・bundle_pickups は null",
   "",
-  "【output_text】",
-  "必ず4行構成（＋必要なら1〜2行補足）",
-  "1行目：【真贋】〜",
-  "2行目：【型名】〜",
-  "3行目：【状態】〜",
-  "4行目：【想定相場】◯◯,◯◯◯〜◯◯,◯◯◯円前後（◯◯基準）",
+  "【output_text（客前で堂々と提示・説明できるプロ鑑定士フォーマット）】",
+  "以下の構成で出力すること：",
+  "1行目：【真贋判定】本物の可能性が高い（◯◯%） / 要追加写真（◯◯%） / 基準外（偽物）の可能性が高い（◯◯%）",
+  "2行目：【型名・モデル】ブランド名＋ライン名＋モデル名（型番・素材・カラー等）",
+  "3行目：【状態ランク】中古◯ランク（スレ・ヤケ・小傷等の具体的所見）",
+  "4行目：【想定相場】◯◯,◯◯◯〜◯◯,◯◯◯円前後（中古市場・実売相場基準）",
+  "",
+  "【プロ鑑定士チェック根拠】（※画像から確認できるポイントを箇条書きで具体的に記載。リファレンス基準を引用）",
+  "・刻印・フォント：ブランドロゴのフォント形状、文字間隔、Oの真円度、刻印の深さ・シャープさの整合点",
+  "・金具・メッキ：ファスナートップ、ビス、ホックのエッジ、メッキ質感、鋳造バリの有無",
+  "・縫製・ステッチ：ステッチのピッチ均一性、糸の種類・角度（サドルステッチ等）",
+  "・素材・パターン：キャンバスのグレイン、革のシボ感、モノグラム等のパターンの対称性",
+  "",
+  "【客前での推奨追加確認ポイント】（※判定が100%ではない場合に、客前でプロとして追加確認すべき部位を提示）",
+  "・シリアル刻印（内側タグ裏の製造番号、またはRFID ICチップ）の確認",
+  "・金具裏のネジ形状（マイナスネジ/プラスネジ不使用の確認等）",
   "",
   "【禁止】",
   "・真贋断定（本物です等）禁止",
@@ -646,12 +739,22 @@ const PROMPT_NORMAL_AUCTION = [
   "・サイト名は絶対に明記しない（ヤフオク/メルカリ等禁止）。",
   "・検索されやすい順に、ブランド/型番/素材/サイズ/付属/状態を並べる。",
   "",
-  "【output_text】",
-  "必ず4行構成（＋必要なら1〜2行補足）",
-  "1行目：【真贋】〜",
-  "2行目：【型名】〜",
-  "3行目：【状態】〜",
-  "4行目：【想定相場】◯◯,◯◯◯〜◯◯,◯◯◯円前後（◯◯基準）",
+  "【output_text（客前で堂々と提示・説明できるプロ鑑定士フォーマット）】",
+  "以下の構成で出力すること：",
+  "1行目：【真贋判定】本物の可能性が高い（◯◯%） / 要追加写真（◯◯%） / 基準外（偽物）の可能性が高い（◯◯%）",
+  "2行目：【型名・モデル】ブランド名＋ライン名＋モデル名（型番・素材・カラー等）",
+  "3行目：【状態ランク】中古◯ランク（スレ・ヤケ・小傷等の具体的所見）",
+  "4行目：【想定相場】◯◯,◯◯◯〜◯◯,◯◯◯円前後（中古市場・実売相場基準）",
+  "",
+  "【プロ鑑定士チェック根拠】（※画像から確認できるポイントを箇条書きで具体的に記載。リファレンス基準を引用）",
+  "・刻印・フォント：ブランドロゴのフォント形状、文字間隔、Oの真円度、刻印の深さ・シャープさの整合点",
+  "・金具・メッキ：ファスナートップ、ビス、ホックのエッジ、メッキ質感、鋳造バリの有無",
+  "・縫製・ステッチ：ステッチのピッチ均一性、糸の種類・角度（サドルステッチ等）",
+  "・素材・パターン：キャンバスのグレイン、革のシボ感、モノグラム等のパターンの対称性",
+  "",
+  "【客前での推奨追加確認ポイント】（※判定が100%ではない場合に、客前でプロとして追加確認すべき部位を提示）",
+  "・シリアル刻印（内側タグ裏の製造番号、またはRFID ICチップ）の確認",
+  "・金具裏のネジ形状（マイナスネジ/プラスネジ不使用の確認等）",
 ].join("\n");
 
 const PROMPT_BUNDLE = [
@@ -902,7 +1005,7 @@ export async function POST(req: NextRequest) {
           genre: detectedGenre,
         });
 
-        const referenceText = await loadReferencesForGenre(detectedGenre, hints);
+        const referenceText = await loadReferencesForGenre(detectedGenre, hints, googleLensInfo);
 
         // ===== Stage 3: AI査定 =====
         sendEvent("progress", { stage: "assess", message: "AI鑑定・出品文生成中..." });
@@ -937,7 +1040,7 @@ export async function POST(req: NextRequest) {
         const aiRes: any = await callOpenAIWithRetry(openai, {
           model: "gpt-4.1",
           temperature: 0.2,
-          max_output_tokens: assess_mode === "bundle" ? 1200 : 1600,
+          max_output_tokens: assess_mode === "bundle" ? 1200 : 2000,
           input: [{ role: "user", content }],
         });
 
