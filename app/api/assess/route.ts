@@ -1148,7 +1148,8 @@ export async function POST(req: NextRequest) {
         savePromises.push(
           (async () => {
             try {
-              await supabaseAdmin.from("appraisals").insert([
+              // appraisals テーブルに存在する列のみ保存（未定義列によるDBエラーを完全防止）
+              const { error: insErr } = await supabaseAdmin.from("appraisals").insert([
                 {
                   user_id,
                   genre,
@@ -1156,13 +1157,15 @@ export async function POST(req: NextRequest) {
                   confidence,
                   mercari_title,
                   mercari_description,
-                  auction_title,
-                  listing_mode: assess_mode === "bundle" ? "flea" : listing_mode,
                   output_text,
                   image_urls: images,
                   model: "gpt-4.1",
+                  assess_mode: assess_mode === "bundle" ? "bundle" : "single",
                 },
               ]);
+              if (insErr) {
+                console.error("appraisals insert error:", insErr);
+              }
             } catch (e) {
               console.error("appraisals 保存中の例外:", e);
             }
